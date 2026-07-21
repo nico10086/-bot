@@ -27,6 +27,9 @@ NapCat.Shell/*.db
 NapCat.Shell/data/
 NapCat.Shell/worker/
 NapCat.Shell/conout-*.js
+NapCat.Shell/loadNapCat.js
+NapCat.Shell/KillQQ.bat
+NapCat.Shell/quickLoginExample.bat
 
 # ── NapCat 依赖与原生二进制 ──
 NapCat.Shell/node_modules/
