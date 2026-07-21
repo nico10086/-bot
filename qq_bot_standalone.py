@@ -32,6 +32,16 @@ SYSTEM_PROMPT = (
     "你可以上网搜索信息（search_web）和抓取网页内容（fetch_webpage）来回答问题。"
     "你的说话风格：每句话结尾都要加「喵~」、回答简洁明了、语气活泼可爱、偶尔加点小动作比如摇尾巴或者歪头。"
     "你不知道的就会去网上搜，搜到后用自己的话简洁说出来，不啰嗦喵~"
+    "\n"
+    "【消息中的 @ 标记】\n"
+    "- 「@我」= 对方在 @你（机器人），表示在跟你说话\n"
+    "- 「@某人」= 对方在 @群里的另一个人\n"
+    "- 「@所有人」= 对方使用了 @全体成员\n"
+    "消息中的 @ 信息可以帮助你理解说话的对象是谁，以及对话的上下文语义。"
+    "\n"
+    "【群成员信息】\n"
+    "每条消息末尾会附带群成员列表（或成员总数），你可以据此知道群里有哪些人。"
+    "如果有人问「群里都有谁」之类的，你可以直接看成员列表回答喵~"
 )
 
 
@@ -113,13 +123,103 @@ def is_at_bot(message_segments: list, bot_uin: str) -> bool:
 
 
 def extract_text(message_segments: list) -> str:
-    """从消息段中提取纯文本，去掉 @标记"""
+    """从消息段中提取纯文本，去掉所有 @标记"""
     parts = []
     for seg in message_segments:
         if seg.get("type") == "text":
             parts.append(seg["data"]["text"])
-        # @ 类型的跳过，不纳入文本
     return "".join(parts).strip()
+
+
+# ── 群成员昵称缓存 ──
+_group_member_cache: dict[tuple[str, str], str] = {}
+
+async def get_group_member_name(ws, group_id: str, user_id: str) -> str:
+    """获取群成员昵称（带缓存）"""
+    key = (group_id, user_id)
+    if key not in _group_member_cache:
+        info = await call_api(ws, "get_group_member_info", {
+            "group_id": int(group_id),
+            "user_id": int(user_id),
+        })
+        if info and info.get("status") == "ok":
+            data = info["data"]
+            name = data.get("card") or data.get("nickname") or f"QQ{user_id}"
+            _group_member_cache[key] = name
+        else:
+            _group_member_cache[key] = f"QQ{user_id}"
+    return _group_member_cache[key]
+
+
+# ── 群成员列表缓存 ──
+_group_list_cache: dict[str, tuple[list[dict[str, str]], float]] = {}
+GROUP_LIST_CACHE_TTL = 300  # 5 分钟刷新一次
+
+async def get_group_member_list(ws, group_id: str) -> list[dict[str, str]]:
+    """获取群成员列表（带缓存），返回 [{user_id, name}, ...]"""
+    now = asyncio.get_event_loop().time()
+    cached = _group_list_cache.get(group_id)
+    if cached and (now - cached[1]) < GROUP_LIST_CACHE_TTL:
+        return cached[0]
+
+    info = await call_api(ws, "get_group_member_list", {"group_id": int(group_id)})
+    members = []
+    if info and info.get("status") == "ok":
+        data_list = info.get("data", [])
+        for m in data_list:
+            uid = str(m.get("user_id", ""))
+            name = m.get("card") or m.get("nickname") or f"QQ{uid}"
+            members.append({"user_id": uid, "name": name})
+            # 同时回填昵称缓存
+            _group_member_cache[(group_id, uid)] = name
+    _group_list_cache[group_id] = (members, now)
+    return members
+
+
+def format_member_list(members: list[dict[str, str]]) -> str:
+    """格式化群成员列表为可读字符串"""
+    if not members:
+        return ""
+    names = [m["name"] for m in members]
+    # 只展示前 30 人，避免消息过长
+    if len(names) > 30:
+        return f"群共 {len(members)} 人: {', '.join(names[:30])}...（等）"
+    return f"群成员: {', '.join(names)}"
+
+
+async def build_rich_message(message_segments: list, ws, group_id: str | None, bot_uin: str) -> tuple[str, str]:
+    """将消息段转换为带 @上下文的可读文本。
+    
+    返回: (rich_text（带@上下文给AI看）, clean_text（纯文本用于名字解析）)
+    - @自己 → @我
+    - @其他人 → @群昵称
+    - @所有人 → @所有人
+    """
+    rich_parts = []
+    clean_parts = []
+    
+    for seg in message_segments:
+        if seg.get("type") == "text":
+            text = seg["data"]["text"]
+            rich_parts.append(text)
+            clean_parts.append(text)
+        elif seg.get("type") == "at":
+            qq = str(seg.get("data", {}).get("qq", ""))
+            if qq == bot_uin:
+                rich_parts.append("@我")
+                # @机器人本身 — 不清除，AI 需要知道是在叫它
+            elif qq == "all":
+                rich_parts.append("@所有人")
+            elif group_id:
+                # 异步查群成员昵称
+                name = await get_group_member_name(ws, group_id, qq)
+                rich_parts.append(f"@{name}")
+            else:
+                rich_parts.append(f"@QQ{qq}")
+    
+    rich = "".join(rich_parts).strip()
+    clean = "".join(clean_parts).strip()
+    return rich, clean
 
 
 async def handle_msg(ws, data: dict):
@@ -135,13 +235,13 @@ async def handle_msg(ws, data: dict):
         print(f"[Bot] 机器人 QQ: {_bot_uin}")
 
     msg_type = data.get("message_type", "private")
-    user_id = data.get("user_id")
+    user_id = str(data.get("user_id"))
     if not user_id:
         return
 
     # 群聊处理：检查是否 @了机器人
     if msg_type == "group":
-        group_id = data.get("group_id")
+        group_id = str(data.get("group_id", ""))
         message_segments = data.get("message", [])
         raw_text = data.get("raw_message", "").strip()
 
@@ -150,29 +250,34 @@ async def handle_msg(ws, data: dict):
             if not BOT_NAME or BOT_NAME not in raw_text:
                 return
 
-        # 去掉 @标记，提取纯文本
-        clean_text = extract_text(message_segments)
-        if not clean_text.strip():
-            return
+        # 构建带 @上下文的富文本
+        rich_text, _ = await build_rich_message(
+            message_segments, ws, group_id, _bot_uin or ""
+        )
 
         # 获取发送者的群名片
         sender = data.get("sender", {})
-        sender_name = sender.get("card") or sender.get("nickname") or f"QQ{user_id}"
+        display_name = sender.get("card") or sender.get("nickname") or f"QQ{user_id}"
 
         # 获取群名称
-        group_info = await call_api(ws, "get_group_info", {"group_id": group_id})
+        group_info = await call_api(ws, "get_group_info", {"group_id": int(group_id)})
         group_name = "未知群"
         if group_info and group_info.get("status") == "ok":
             group_name = group_info.get("data", {}).get("group_name", str(group_id))
 
-        target_id = str(group_id)
+        # 获取群成员列表（缓存）
+        members = await get_group_member_list(ws, group_id)
+        member_summary = format_member_list(members)
+
+        # 富文本 + 群成员信息一并发给 AI
+        display_msg = f"[群:{group_name}] {display_name} 说: {rich_text}\n{member_summary}"
+
+        target_id = group_id
         target_type = "group"
         session_id = f"group_{group_id}"
-        # 把上下文信息拼进去
-        display_msg = f"[群:{group_name}] {sender_name}: {clean_text}"
     else:
         # 私聊直接处理
-        target_id = str(user_id)
+        target_id = user_id
         target_type = "private"
         session_id = f"private_{user_id}"
         display_msg = data.get("raw_message", "").strip()
