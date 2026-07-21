@@ -63,7 +63,7 @@ async def init_mcp():
         model="deepseek-chat",
         api_key=DEEPSEEK_KEY,
         base_url="https://api.deepseek.com/v1",
-        temperature=0,
+        temperature=0.7,
     )
     print("[MCP] 初始化完成")
 
