@@ -1,43 +1,59 @@
-# Python 虚拟环境
+# ── 密钥与凭证（敏感信息） ──
+.env
+.env.local
+.env.*.local
+
+# ── Python 虚拟环境 ──
 env/
 .env/
 venv/
 .venv/
 
-# Python 缓存
+# ── Python 缓存 ──
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 *.egg-info/
 dist/
 build/
 *.egg
+*.so
+*.pyd
 
-# IDE 配置
-.vscode/
-.idea/
-
-# 操作系统文件
-Thumbs.db
-.DS_Store
-
-# NapCat 日志和缓存
-NapCat.Shell/logs/
+# ── NapCat 缓存与运行时数据 ──
 NapCat.Shell/cache/
+NapCat.Shell/logs/
+NapCat.Shell/*.db
+NapCat.Shell/data/
+NapCat.Shell/worker/
+NapCat.Shell/conout-*.js
 
-# Node.js 依赖
-node_modules/
+# ── NapCat 依赖与原生二进制 ──
 NapCat.Shell/node_modules/
+NapCat.Shell/native/
 
-# 数据库文件
+# ── NapCat WebUI 静态文件 ──
+NapCat.Shell/static/
+
+# ── NapCat 配置（含 QQ 号或 token 的敏感配置） ──
+NapCat.Shell/config/webui.json
+NapCat.Shell/config/napcat_*.json
+NapCat.Shell/config/onebot11_*.json
+NapCat.Shell/config/napcat_protocol_*.json
+
+# ── 数据库文件 ──
 *.db
 *.sqlite
 *.sqlite3
 
-# NapCat 运行时数据
-NapCat.Shell/guild1.db
-NapCat.Shell/data/
+# ── IDE / 编辑器 ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
 
-# 环境变量文件（敏感信息）
-.env
+# ── 系统文件 ──
+desktop.ini
