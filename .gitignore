@@ -1,0 +1,43 @@
+# Python 虚拟环境
+env/
+.env/
+venv/
+.venv/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE 配置
+.vscode/
+.idea/
+
+# 操作系统文件
+Thumbs.db
+.DS_Store
+
+# NapCat 日志和缓存
+NapCat.Shell/logs/
+NapCat.Shell/cache/
+
+# Node.js 依赖
+node_modules/
+NapCat.Shell/node_modules/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# NapCat 运行时数据
+NapCat.Shell/guild1.db
+NapCat.Shell/data/
+
+# 环境变量文件（敏感信息）
+.env
