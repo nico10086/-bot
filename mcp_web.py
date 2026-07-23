@@ -34,7 +34,7 @@ BASE_HEADERS_TEMPLATE = {
         "q=0.9,image/avif,image/webp,*/*;q=0.8"
     ),
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate",
     "Referer": "https://www.google.com/",
     "DNT": "1",
     "Connection": "keep-alive",
@@ -73,20 +73,12 @@ def get_session() -> httpx.Client:
             max_connections=10,
             keepalive_expiry=30,
         )
-        # 自定义 TLS 指纹（模拟 Chrome）
-        ctx = ssl.create_default_context()
-        ctx.set_ciphers(
-            "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:"
-            "TLS_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:"
-            "ECDHE-RSA-AES128-GCM-SHA256"
-        )
         _session = httpx.Client(
             timeout=httpx.Timeout(30.0, connect=15.0, read=25.0),
             follow_redirects=True,
             cookies=httpx.Cookies(),
             limits=limits,
-            verify=ctx,
-            http2=True,  # 启用 HTTP/2，更像真实浏览器
+            http2=False,
         )
     return _session
 
