@@ -12,7 +12,7 @@ import time
 import signal
 import io
 import tkinter as tk
-from tkinter import scrolledtext, font
+from tkinter import scrolledtext, font, messagebox
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from PIL import Image, ImageDraw, ImageFont, ImageTk
