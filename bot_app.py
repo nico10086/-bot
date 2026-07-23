@@ -506,41 +506,71 @@ class BotApp:
                                      **btn_style)
         self.btn_restart.pack(side="left", padx=(0, 8))
 
-        # ── 配置行 ──
+        # ── 配置行 1：性格 + 模型 ──
         config_frame = tk.Frame(parent, bg=self.BG)
-        config_frame.pack(fill="x", padx=20, pady=(4, 8))
+        config_frame.pack(fill="x", padx=20, pady=(4, 2))
 
         tk.Label(config_frame, text="性格：", font=self.FONT_SM,
                  fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
-
         self.personality_var = tk.StringVar(value="catgirl")
         self.personality_menu = tk.OptionMenu(
             config_frame, self.personality_var,
             "catgirl", "tsundere",
-            command=lambda _: self._save_personality()
+            command=lambda _: self._save_config()
         )
         self.personality_menu.config(
             bg=self.CARD, fg=self.TEXT, font=self.FONT_SM,
-            activebackground=self.CARD_HOVER if hasattr(self, 'CARD_HOVER') else self.CARD,
             highlightthickness=0, border=0,
         )
         self.personality_menu.pack(side="left", padx=(0, 12))
 
-        tk.Label(config_frame, text="模型：", font=self.FONT_SM,
+        tk.Label(config_frame, text="提供商：", font=self.FONT_SM,
+                 fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
+        self.provider_var = tk.StringVar(value="deepseek")
+        self.provider_menu = tk.OptionMenu(
+            config_frame, self.provider_var,
+            "deepseek",
+            command=lambda _: self._on_provider_change()
+        )
+        self.provider_menu.config(
+            bg=self.CARD, fg=self.TEXT, font=self.FONT_SM,
+            highlightthickness=0, border=0,
+        )
+        self.provider_menu.pack(side="left", padx=(0, 12))
+
+        tk.Label(config_frame, text="模型名：", font=self.FONT_SM,
                  fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
         self.cfg_model = tk.Entry(config_frame, font=self.FONT_SM,
                                   bg=self.CARD, fg=self.TEXT,
-                                  border=0, width=16, insertbackground=self.TEXT)
+                                  border=0, width=14, insertbackground=self.TEXT)
         self.cfg_model.pack(side="left", padx=(0, 12))
         self.cfg_model.insert(0, "deepseek-chat")
 
-        tk.Label(config_frame, text="Temp：", font=self.FONT_SM,
+        # ── 配置行 2：API Key + Temp + 保存 ──
+        config_frame2 = tk.Frame(parent, bg=self.BG)
+        config_frame2.pack(fill="x", padx=20, pady=(2, 4))
+
+        tk.Label(config_frame2, text="API Key：", font=self.FONT_SM,
                  fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
-        self.cfg_temp = tk.Entry(config_frame, font=self.FONT_SM,
+        self.cfg_apikey = tk.Entry(config_frame2, font=self.FONT_SM,
+                                   bg=self.CARD, fg=self.TEXT,
+                                   border=0, width=30, insertbackground=self.TEXT,
+                                   show="*")  # 密码模式隐藏密钥
+        self.cfg_apikey.pack(side="left", padx=(0, 12))
+
+        tk.Label(config_frame2, text="Temp：", font=self.FONT_SM,
+                 fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
+        self.cfg_temp = tk.Entry(config_frame2, font=self.FONT_SM,
                                  bg=self.CARD, fg=self.TEXT,
-                                 border=0, width=6, insertbackground=self.TEXT)
+                                 border=0, width=5, insertbackground=self.TEXT)
         self.cfg_temp.pack(side="left", padx=(0, 12))
         self.cfg_temp.insert(0, "0.7")
+
+        self.btn_save_config = tk.Button(config_frame2, text="💾 保存配置",
+                                         bg=self.PINK, fg="white",
+                                         font=self.FONT_SM, border=0, cursor="hand2",
+                                         command=self._save_config)
+        self.btn_save_config.pack(side="left")
 
         # 单独启动按钮（右上）
         btn_top = tk.Frame(parent, bg=self.BG)
@@ -555,19 +585,33 @@ class BotApp:
                                       command=lambda: threading.Thread(target=lambda: add_log(start_bot()), daemon=True).start())
         self.btn_bot_only.pack(side="right", padx=(4, 0))
 
-    def _save_personality(self):
-        """保存性格设置到 .env"""
-        val = self.personality_var.get()
-        personality_map = {"catgirl": "catgirl", "tsundere": "tsundere"}
-        mapped = personality_map.get(val, "catgirl")
+    def _save_config(self, *args):
+        """保存所有配置到 .env"""
         env = load_env()
-        env["BOT_PERSONALITY"] = mapped
+        env["BOT_PERSONALITY"] = self.personality_var.get()
+        env["MODEL_PROVIDER"] = self.provider_var.get()
+        env["MODEL_NAME"] = self.cfg_model.get().strip()
+        api_key = self.cfg_apikey.get().strip()
+        if api_key:
+            env["API_KEY"] = api_key
+        temp = self.cfg_temp.get().strip()
+        if temp:
+            env["temperature"] = temp
         save_env(env)
-        add_log(f"🎭 性格已切换为: {mapped}")
-        # 如果 Bot 正在运行，提醒重启生效
+        add_log("💾 配置已保存")
         s = get_status()
         if s["bot"]:
-            add_log("💡 性格已保存，重启 Bot 后生效")
+            add_log("💡 重启 Bot 后生效")
+
+    def _on_provider_change(self, *args):
+        """提供商切换时自动填充默认模型名"""
+        provider = self.provider_var.get()
+        defaults = {
+            "deepseek": "deepseek-chat",
+        }
+        if provider in defaults:
+            self.cfg_model.delete(0, "end")
+            self.cfg_model.insert(0, defaults[provider])
 
     def _build_qrcode(self, parent):
         """二维码显示区域（左侧）"""
@@ -687,11 +731,17 @@ class BotApp:
         personality = env.get("BOT_PERSONALITY", "catgirl")
         if personality in ("catgirl", "tsundere"):
             self.personality_var.set(personality)
-        model = env.get("model", "")
+        provider = env.get("MODEL_PROVIDER", "deepseek")
+        self.provider_var.set(provider)
+        model = env.get("MODEL_NAME", "deepseek-chat")
         if model:
             self.cfg_model.delete(0, "end")
             self.cfg_model.insert(0, model)
-        temp = env.get("temperature", "")
+        api_key = env.get("API_KEY", "")
+        if api_key:
+            self.cfg_apikey.delete(0, "end")
+            self.cfg_apikey.insert(0, api_key)
+        temp = env.get("temperature", "0.7")
         if temp:
             self.cfg_temp.delete(0, "end")
             self.cfg_temp.insert(0, temp)

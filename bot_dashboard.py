@@ -659,16 +659,29 @@ HTML_PAGE = r"""<!DOCTYPE html>
     <div class="card">
       <h3>⚙️ 快速配置</h3>
       <div class="config-row">
-        <div class="config-label">模型 <small>deepseek-v4-flash / pro</small></div>
+        <div class="config-label">提供商</div>
+        <select class="config-input" id="cfgProvider">
+          <option value="deepseek">DeepSeek</option>
+        </select>
+      </div>
+      <div class="config-row">
+        <div class="config-label">模型名</div>
         <input class="config-input" id="cfgModel" value="deepseek-chat" />
       </div>
       <div class="config-row">
-        <div class="config-label">Temperature <small>0~1，越高越灵活</small></div>
+        <div class="config-label">API Key <small>必填</small></div>
+        <input class="config-input" id="cfgApiKey" type="password" value="" placeholder="sk-..." />
+      </div>
+      <div class="config-row">
+        <div class="config-label">Temperature <small>0~1</small></div>
         <input class="config-input" id="cfgTemp" value="0.7" type="number" step="0.1" min="0" max="1" />
       </div>
       <div class="config-row">
-        <div class="config-label">Bot 名字 <small>群聊触发词</small></div>
-        <input class="config-input" id="cfgName" value="猫娘" />
+        <div class="config-label">性格</div>
+        <select class="config-input" id="cfgPersonality">
+          <option value="catgirl">猫娘（软萌）</option>
+          <option value="tsundere">雌小鬼（傲娇）</option>
+        </select>
       </div>
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary btn-sm" onclick="saveConfig()">💾 保存</button>
@@ -774,9 +787,11 @@ async function refreshLogs() {
 
 async function refreshConfig() {
   const data = await api('/api/config');
-  if (data.model) document.getElementById('cfgModel').value = data.model;
+  if (data.MODEL_PROVIDER) document.getElementById('cfgProvider').value = data.MODEL_PROVIDER;
+  if (data.MODEL_NAME) document.getElementById('cfgModel').value = data.MODEL_NAME;
+  if (data.API_KEY) document.getElementById('cfgApiKey').value = data.API_KEY;
   if (data.temperature !== undefined) document.getElementById('cfgTemp').value = data.temperature;
-  if (data.BOT_NAME) document.getElementById('cfgName').value = data.BOT_NAME;
+  if (data.BOT_PERSONALITY) document.getElementById('cfgPersonality').value = data.BOT_PERSONALITY;
 }
 
 function escapeHtml(text) {
@@ -817,11 +832,12 @@ async function startBotOnly() {
 
 async function saveConfig() {
   const config = {
-    model: document.getElementById('cfgModel').value.trim(),
+    MODEL_PROVIDER: document.getElementById('cfgProvider').value,
+    MODEL_NAME: document.getElementById('cfgModel').value.trim(),
+    API_KEY: document.getElementById('cfgApiKey').value.trim(),
     temperature: document.getElementById('cfgTemp').value.trim(),
-    BOT_NAME: document.getElementById('cfgName').value.trim(),
+    BOT_PERSONALITY: document.getElementById('cfgPersonality').value,
   };
-  if (config.model === 'deepseek-chat') delete config.model;
   const data = await api('/api/config', 'POST', { config });
   showToast(data.message || '已保存');
   refreshConfig();

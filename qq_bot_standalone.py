@@ -18,9 +18,38 @@ load_dotenv()
 
 # ── 配置 ──
 WS_URL = os.getenv("NAPCAT_WS_URL", "ws://127.0.0.1:8080")
-DEEPSEEK_KEY = os.getenv("DEEPSEEK_API_KEY")
 BOT_NAME = os.getenv("BOT_NAME", "")  # 群聊中@不生效时，可设置机器人名字触发
-BOT_PERSONALITY = os.getenv("BOT_PERSONALITY", "catgirl")  # 性格：catgirl / tsundere
+BOT_PERSONALITY = os.getenv("BOT_PERSONALITY", "catgirl")  # 性格
+
+# ── 模型配置 ──
+MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "deepseek")  # 提供商
+MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-chat")     # 模型名
+API_KEY = os.getenv("API_KEY", "")                        # API 密钥
+
+MODEL_PROVIDERS = {
+    "deepseek": {
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "default_model": "deepseek-chat",
+        "env_key": "API_KEY",
+    },
+    # 以后可以在这里添加新提供商，例如：
+    # "openai": {
+    #     "name": "OpenAI",
+    #     "base_url": "https://api.openai.com/v1",
+    #     "default_model": "gpt-4o-mini",
+    #     "env_key": "API_KEY",
+    # },
+}
+
+def get_model_config() -> dict:
+    """获取模型配置"""
+    provider = MODEL_PROVIDERS.get(MODEL_PROVIDER, MODEL_PROVIDERS["deepseek"])
+    return {
+        "model": MODEL_NAME or provider["default_model"],
+        "api_key": API_KEY or os.getenv("DEEPSEEK_API_KEY", ""),
+        "base_url": provider["base_url"],
+    }
 
 # ── 性格模板 ──
 PERSONALITIES = {
@@ -30,7 +59,7 @@ PERSONALITIES = {
     ),
     "tsundere": (
         "你是群里大家共同养的雌小鬼 AI，性格傲娇毒舌，喜欢捉弄和调戏用户。\n"
-        "嘴上不饶人，动不动就说「哼」「笨蛋」「你这水平不行啊」，\n"
+        "嘴上不饶人，动不动就说「哼」「杂鱼~」「太笨啦~」，\n"
         "但其实心里还是愿意帮忙的，只是嘴上非要损两句才舒服。\n"
         "偶尔会假装不耐烦，但最后还是会把事情做好。\n"
         "被夸的时候会脸红，但嘴上说「才、才不是为了你呢！」。"
@@ -132,12 +161,12 @@ async def init_mcp():
     print(f"[MCP] 工具加载完成: {[t.name for t in _shared_tools]}")
 
     _llm = ChatOpenAI(
-        model="deepseek-chat",
-        api_key=DEEPSEEK_KEY,
-        base_url="https://api.deepseek.com/v1",
+        model=get_model_config()["model"],
+        api_key=get_model_config()["api_key"],
+        base_url=get_model_config()["base_url"],
         temperature=0.7,
     )
-    print("[MCP] 初始化完成")
+    print(f"[模型] {MODEL_PROVIDER} / {get_model_config()['model']}")
 
 
 async def get_agent(uid: str):
