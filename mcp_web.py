@@ -278,13 +278,24 @@ def fetch_webpage(url: str) -> str:
 def search_web(keyword: str) -> str:
     """
     搜索网络信息（新闻、百科、知识等），返回简洁结果摘要。
-    优先搜索百度百科，备用百度网页搜索。
+    多引擎搜索：Bing + 百度百科 + DuckDuckGo，提高成功率。
     """
     try:
         encoded = urllib.parse.quote(keyword)
         results = []
 
-        # ── 1. 百度百科（优先） ──
+        # ── 1. Bing 搜索（主引擎，对爬虫友好） ──
+        try:
+            url = f"https://cn.bing.com/search?q={encoded}&count=5"
+            resp = http_get(url, timeout=15,
+                            referer="https://cn.bing.com/")
+            text = extract_text(resp.text, max_length=4000)
+            if text and "captcha" not in resp.text.lower()[:500]:
+                results.append(f"【Bing 搜索】\n{text}")
+        except Exception:
+            pass
+
+        # ── 2. 百度百科（知识查询） ──
         try:
             search_url = f"https://baike.baidu.com/search?word={encoded}"
             resp = http_get(search_url, timeout=15)
@@ -300,26 +311,14 @@ def search_web(keyword: str) -> str:
         except Exception:
             pass
 
-        # ── 2. 百度网页搜索 ──
+        # ── 3. DuckDuckGo 搜索（备选，纯HTML版，几乎不会被反爬） ──
         try:
-            url = f"https://www.baidu.com/s?wd={encoded}&rn=5"
+            url = f"https://html.duckduckgo.com/html/?q={encoded}"
             resp = http_get(url, timeout=15,
-                            referer="https://www.baidu.com/")
+                            referer="https://html.duckduckgo.com/")
             text = extract_text(resp.text, max_length=3000)
-            if text:
-                results.append(f"【网页搜索】\n{text}")
-        except Exception:
-            pass
-
-        # ── 3. B站搜索（作为备选） ──
-        try:
-            url = f"https://search.bilibili.com/all?keyword={encoded}"
-            resp = http_get(url, timeout=15,
-                            referer="https://www.bilibili.com/")
-            if not is_blocked_response(resp):
-                text = extract_text(resp.text, max_length=2000)
-                if text:
-                    results.append(f"【B站搜索结果】\n{text}")
+            if text and len(text) > 100:
+                results.append(f"【DuckDuckGo 搜索】\n{text}")
         except Exception:
             pass
 
