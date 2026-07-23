@@ -21,11 +21,23 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 BOT_SCRIPT = os.path.join(BASE_DIR, "qq_bot_standalone.py")
 
-# ── Bot 进程管理 ──
+# ── 路径常量 ──
+NAPCAT_DIR = os.path.join(BASE_DIR, "NapCat.Shell")
+NAPCAT_LAUNCHER = os.path.join(NAPCAT_DIR, "NapCatWinBootMain.exe")
+NAPCAT_INJECT = os.path.join(NAPCAT_DIR, "NapCatWinBootHook.dll")
+NAPCAT_MAIN = os.path.join(NAPCAT_DIR, "napcat.mjs")
+NAPCAT_PATCH = os.path.join(NAPCAT_DIR, "qqnt.json")
+NAPCAT_LOAD_JS = os.path.join(NAPCAT_DIR, "loadNapCat.js")
+QR_PATH = os.path.join(NAPCAT_DIR, "cache", "qrcode.png")
+
+# ── 进程管理 ──
 _bot_process: subprocess.Popen | None = None
+_napcat_process: subprocess.Popen | None = None
 _bot_logs: list[str] = []
 _log_lock = threading.Lock()
 _env_config: dict[str, str] = {}
+_startup_stage: str = "idle"  # idle → napcat → qr → websocket → bot_running
+_ws_ready: bool = False
 
 
 def load_env() -> dict[str, str]:
@@ -76,22 +88,160 @@ def add_log(msg: str) -> None:
 
 
 def get_bot_status() -> dict:
-    """获取 Bot 运行状态"""
-    global _bot_process
-    if _bot_process is None:
-        return {"running": False, "pid": None}
-    ret = _bot_process.poll()
-    if ret is not None:
-        _bot_process = None
-        return {"running": False, "pid": None, "exit_code": ret}
-    return {"running": True, "pid": _bot_process.pid}
+    """获取 Bot + NapCat 综合运行状态"""
+    global _bot_process, _napcat_process, _startup_stage, _ws_ready
+    # 检查 NapCat 进程
+    napcat_running = False
+    if _napcat_process is not None:
+        ret = _napcat_process.poll()
+        if ret is not None:
+            _napcat_process = None
+        else:
+            napcat_running = True
+    # 检查 Bot 进程
+    bot_running = False
+    if _bot_process is not None:
+        ret = _bot_process.poll()
+        if ret is not None:
+            _bot_process = None
+        else:
+            bot_running = True
+    # 二维码是否存在
+    qr_exists = os.path.exists(QR_PATH)
+    return {
+        "bot_running": bot_running,
+        "napcat_running": napcat_running,
+        "stage": _startup_stage,
+        "ws_ready": _ws_ready,
+        "qr_exists": qr_exists,
+        "pid": _bot_process.pid if _bot_process else None,
+    }
+
+
+def find_qq_path() -> str | None:
+    """从注册表查找 QQ 安装路径"""
+    import winreg
+    for hive in (winreg.HKEY_LOCAL_MACHINE,):
+        for subkey in (
+            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\QQ",
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\QQ",
+        ):
+            try:
+                key = winreg.OpenKey(hive, subkey)
+                val, _ = winreg.QueryValueEx(key, "UninstallString")
+                winreg.CloseKey(key)
+                qq_path = os.path.join(os.path.dirname(val), "QQ.exe")
+                if os.path.exists(qq_path):
+                    return qq_path
+            except Exception:
+                continue
+    return None
+
+
+def start_napcat() -> str:
+    """启动 NapCat（查找 QQ → 注入 → 生成二维码）"""
+    global _napcat_process, _startup_stage, _ws_ready
+
+    if _napcat_process is not None and _napcat_process.poll() is None:
+        return "NapCat 已经在运行了"
+
+    qq_path = find_qq_path()
+    if not qq_path:
+        add_log("❌ 找不到 QQ.exe，请确认已安装 QQNT")
+        return "❌ 找不到 QQ.exe，请确认已安装 QQNT"
+
+    add_log(f"🔍 找到 QQ: {qq_path}")
+    add_log("🚀 正在启动 NapCat 注入 QQ...")
+
+    # 生成 loadNapCat.js
+    main_path = NAPCAT_MAIN.replace("\\", "/")
+    with open(NAPCAT_LOAD_JS, "w", encoding="utf-8") as f:
+        f.write(f'(async () => {{await import("file:///{main_path}")}})()\n')
+
+    # 清理旧二维码
+    if os.path.exists(QR_PATH):
+        os.remove(QR_PATH)
+
+    # 设置环境变量
+    env = os.environ.copy()
+    env["NAPCAT_PATCH_PACKAGE"] = NAPCAT_PATCH
+    env["NAPCAT_LOAD_PATH"] = NAPCAT_LOAD_JS
+    env["NAPCAT_INJECT_PATH"] = NAPCAT_INJECT
+    env["NAPCAT_LAUNCHER_PATH"] = NAPCAT_LAUNCHER
+
+    try:
+        _napcat_process = subprocess.Popen(
+            [NAPCAT_LAUNCHER, qq_path, NAPCAT_INJECT],
+            cwd=NAPCAT_DIR,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+        _startup_stage = "napcat"
+        _ws_ready = False
+        add_log("✅ NapCat 已启动，等待二维码生成...")
+
+        # 后台线程：监控二维码 + WebSocket 端口
+        def monitor_startup():
+            global _startup_stage, _ws_ready
+            qr_opened = False
+            for i in range(120):  # 最多等 120 秒
+                time.sleep(1)
+                # 检测二维码
+                if not qr_opened and os.path.exists(QR_PATH):
+                    qr_opened = True
+                    _startup_stage = "qr"
+                    add_log(f"📱 二维码已生成（等待 {i+1} 秒）")
+                # 检测 WebSocket 端口
+                if not _ws_ready:
+                    try:
+                        result = subprocess.run(
+                            ["netstat", "-an"],
+                            capture_output=True, text=True, timeout=5,
+                        )
+                        if ":8080" in result.stdout and "LISTENING" in result.stdout:
+                            _ws_ready = True
+                            _startup_stage = "websocket"
+                            add_log(f"✅ WebSocket 端口 8080 已就绪（耗时 {i+1} 秒）")
+                    except Exception:
+                        pass
+                if qr_opened and _ws_ready:
+                    _startup_stage = "ready"
+                    add_log("🎉 NapCat 就绪，可以启动 Bot 了！")
+                    break
+            if not _ws_ready:
+                add_log("⚠️ 等待超时，NapCat 可能未完全启动")
+
+        t = threading.Thread(target=monitor_startup, daemon=True)
+        t.start()
+        return f"✅ NapCat 已启动，二维码即将生成"
+    except Exception as e:
+        add_log(f"❌ NapCat 启动失败：{e}")
+        return f"❌ NapCat 启动失败：{e}"
+
+
+def stop_napcat() -> str:
+    """停止 NapCat 和 QQ"""
+    global _napcat_process, _startup_stage, _ws_ready
+    try:
+        subprocess.run(["taskkill", "/F", "/IM", "NapCatWinBootMain.exe"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["taskkill", "/F", "/IM", "QQ.exe"],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+    _napcat_process = None
+    _startup_stage = "idle"
+    _ws_ready = False
+    add_log("⏹ NapCat 已停止")
+    return "✅ NapCat 已停止"
 
 
 def start_bot() -> str:
-    """启动 Bot"""
+    """启动 Bot（前提：NapCat 已在运行）"""
     global _bot_process
-    status = get_bot_status()
-    if status["running"]:
+    if _bot_process is not None and _bot_process.poll() is None:
         return "Bot 已经在运行中了喵~"
 
     env = os.environ.copy()
@@ -110,7 +260,6 @@ def start_bot() -> str:
         )
         add_log("🚀 Bot 已启动")
 
-        # 启动日志读取线程
         def read_output():
             global _bot_process
             try:
@@ -126,37 +275,67 @@ def start_bot() -> str:
         t.start()
         return "✅ Bot 启动成功！"
     except Exception as e:
-        add_log(f"❌ 启动失败：{e}")
-        return f"❌ 启动失败：{e}"
+        add_log(f"❌ Bot 启动失败：{e}")
+        return f"❌ Bot 启动失败：{e}"
+
+
+def start_full() -> str:
+    """一键全流程启动：NapCat → 等就绪 → Bot"""
+    status = get_bot_status()
+    if status["bot_running"]:
+        return "猫娘已经在运行了喵~"
+
+    # 先启动 NapCat
+    msg = start_napcat()
+    if "失败" in msg:
+        return msg
+
+    # 等 WebSocket 就绪后自动启动 Bot
+    def auto_start_bot():
+        global _startup_stage
+        for _ in range(150):  # 最多等 150 秒
+            time.sleep(1)
+            if _ws_ready:
+                time.sleep(2)  # 再等 2 秒让 NapCat 稳定
+                result = start_bot()
+                add_log(result)
+                _startup_stage = "bot_running"
+                return
+        add_log("⏱ NapCat 启动超时，请扫码后手动点击「启动 Bot」")
+
+    t = threading.Thread(target=auto_start_bot, daemon=True)
+    t.start()
+    return "🚀 全流程启动中（NapCat → 二维码 → Bot）..."
 
 
 def stop_bot() -> str:
     """停止 Bot"""
     global _bot_process
     status = get_bot_status()
-    if not status["running"]:
-        return "Bot 当前没有运行喵~"
-
-    try:
-        if sys.platform == "win32":
+    if status["bot_running"]:
+        try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(status["pid"])],
                            capture_output=True, timeout=5)
-        else:
-            os.kill(status["pid"], signal.SIGTERM)
+        except Exception:
+            pass
         _bot_process = None
         add_log("⏹ Bot 已停止")
-        return "✅ Bot 已停止"
-    except Exception as e:
-        add_log(f"❌ 停止失败：{e}")
-        return f"❌ 停止失败：{e}"
+    return "✅ Bot 已停止"
 
 
-def restart_bot() -> str:
-    """重启 Bot"""
-    msg = stop_bot()
-    time.sleep(1)
-    msg2 = start_bot()
-    return f"{msg}\n{msg2}"
+def stop_full() -> str:
+    """完全停止：Bot + NapCat + QQ"""
+    msg1 = stop_bot()
+    time.sleep(0.5)
+    msg2 = stop_napcat()
+    return f"{msg1}\n{msg2}"
+
+
+def restart_full() -> str:
+    """完全重启"""
+    stop_full()
+    time.sleep(2)
+    return start_full()
 
 
 # ── HTTP 服务器 ──
@@ -176,6 +355,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._json_response({"logs": logs})
         elif path == "/api/config":
             self._json_response(load_env())
+        elif path == "/api/qrcode":
+            self._serve_qrcode()
         else:
             self._json_response({"error": "Not found"}, 404)
 
@@ -187,13 +368,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
         data = json.loads(body) if body else {}
 
         if path == "/api/start":
-            msg = start_bot()
+            msg = start_full()
             self._json_response({"message": msg, "status": get_bot_status()})
         elif path == "/api/stop":
-            msg = stop_bot()
+            msg = stop_full()
             self._json_response({"message": msg, "status": get_bot_status()})
         elif path == "/api/restart":
-            msg = restart_bot()
+            msg = restart_full()
+            self._json_response({"message": msg, "status": get_bot_status()})
+        elif path == "/api/start-bot":
+            msg = start_bot()
+            self._json_response({"message": msg, "status": get_bot_status()})
+        elif path == "/api/start-napcat":
+            msg = start_napcat()
             self._json_response({"message": msg, "status": get_bot_status()})
         elif path == "/api/config":
             if "config" in data:
@@ -204,6 +391,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json_response({"error": "缺少 config 字段"}, 400)
         else:
             self._json_response({"error": "Not found"}, 404)
+
+    def _serve_qrcode(self):
+        """提供二维码图片"""
+        if os.path.exists(QR_PATH):
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            with open(QR_PATH, "rb") as f:
+                self.wfile.write(f.read())
+        else:
+            self._json_response({"error": "二维码还未生成"}, 404)
 
     def _serve_html(self):
         self.send_response(200)
@@ -268,19 +467,28 @@ HTML_PAGE = r"""<!DOCTYPE html>
   /* Status Bar */
   .status-bar {
     background: var(--card); border-radius: var(--radius); padding: 20px 24px;
-    display: flex; align-items: center; justify-content: space-between;
     box-shadow: var(--shadow); margin-bottom: 20px;
+  }
+  .status-row {
+    display: flex; align-items: center; justify-content: space-between;
     flex-wrap: wrap; gap: 12px;
   }
-  .status-left { display: flex; align-items: center; gap: 12px; }
+  .status-item { display: flex; align-items: center; gap: 10px; }
   .status-dot {
-    width: 14px; height: 14px; border-radius: 50%;
+    width: 12px; height: 12px; border-radius: 50%;
     background: var(--red); transition: all .3s;
-    box-shadow: 0 0 8px var(--red);
+    box-shadow: 0 0 6px var(--red);
   }
-  .status-dot.running { background: var(--green); box-shadow: 0 0 8px var(--green); }
-  .status-text { font-size: 16px; font-weight: 600; }
-  .status-pid { color: var(--text-dim); font-size: 13px; }
+  .status-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-label { font-size: 13px; color: var(--text-dim); }
+  .status-value { font-size: 14px; font-weight: 600; }
+
+  .status-details {
+    display: flex; gap: 24px; flex-wrap: wrap;
+    margin-top: 12px; padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 13px; color: var(--text-dim);
+  }
 
   /* Buttons */
   .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -299,10 +507,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .btn-danger:hover:not(:disabled) { filter: brightness(1.1); }
   .btn-warning { background: var(--yellow); color: #1a1b2e; }
   .btn-warning:hover:not(:disabled) { filter: brightness(1.1); }
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
 
   /* Grid */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
-  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
 
   /* Card */
   .card {
@@ -315,6 +524,22 @@ HTML_PAGE = r"""<!DOCTYPE html>
     align-items: center; gap: 8px;
   }
 
+  /* QR Code */
+  .qr-area {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 200px;
+  }
+  .qr-area img {
+    width: 200px; height: 200px; border-radius: 8px;
+    image-rendering: pixelated;
+  }
+  .qr-placeholder {
+    width: 200px; height: 200px; border-radius: 8px;
+    background: var(--bg); display: flex; align-items: center;
+    justify-content: center; color: var(--text-dim); font-size: 14px;
+    border: 2px dashed var(--border); text-align: center; padding: 20px;
+  }
+
   /* Config */
   .config-row {
     display: flex; align-items: center; justify-content: space-between;
@@ -325,7 +550,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .config-label small { color: var(--text-dim); display: block; font-size: 12px; }
   .config-input {
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 6px 10px; color: var(--text); font-size: 13px; width: 160px;
+    padding: 6px 10px; color: var(--text); font-size: 13px; width: 140px;
     transition: border .2s;
   }
   .config-input:focus { outline: none; border-color: var(--primary); }
@@ -333,7 +558,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   /* Logs */
   .log-area {
     background: #0d0e1a; border-radius: 8px; padding: 16px;
-    height: 320px; overflow-y: auto; font-family: 'Cascadia Code', 'Fira Code', monospace;
+    height: 280px; overflow-y: auto; font-family: 'Cascadia Code', 'Fira Code', monospace;
     font-size: 12px; line-height: 1.6;
   }
   .log-area::-webkit-scrollbar { width: 4px; }
@@ -352,7 +577,20 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
   .toast.show { opacity: 1; bottom: 32px; }
 
-  /* Footer */
+  /* Progress */
+  .progress-bar {
+    display: flex; gap: 6px; align-items: center;
+    margin-top: 8px;
+  }
+  .progress-step {
+    padding: 3px 10px; border-radius: 12px; font-size: 11px;
+    background: var(--border); color: var(--text-dim);
+    transition: all .3s;
+  }
+  .progress-step.active { background: var(--yellow); color: #1a1b2e; }
+  .progress-step.done { background: var(--green); color: #1a1b2e; }
+  .progress-step.fail { background: var(--red); color: #fff; }
+
   footer {
     text-align: center; color: var(--text-dim); font-size: 12px;
     padding: 20px 0; border-top: 1px solid var(--border); margin-top: 24px;
@@ -368,21 +606,53 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
   <!-- 状态栏 -->
   <div class="status-bar">
-    <div class="status-left">
-      <div class="status-dot" id="statusDot"></div>
-      <div>
-        <div class="status-text" id="statusText">检测中...</div>
-        <div class="status-pid" id="statusPid"></div>
+    <div class="status-row">
+      <div style="display:flex;gap:24px;flex-wrap:wrap">
+        <div class="status-item">
+          <div class="status-dot" id="napcatDot"></div>
+          <div><div class="status-label">NapCat</div><div class="status-value" id="napcatText">检测中</div></div>
+        </div>
+        <div class="status-item">
+          <div class="status-dot" id="botDot"></div>
+          <div><div class="status-label">Bot</div><div class="status-value" id="botText">检测中</div></div>
+        </div>
+        <div class="status-item">
+          <div class="status-dot" id="wsDot"></div>
+          <div><div class="status-label">WebSocket</div><div class="status-value" id="wsText">检测中</div></div>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-success" id="btnStart" onclick="startAll()">▶ 一键启动</button>
+        <button class="btn btn-danger" id="btnStop" onclick="stopAll()">■ 全部停止</button>
+        <button class="btn btn-warning" id="btnRestart" onclick="restartAll()">↻ 重启</button>
       </div>
     </div>
-    <div class="btn-group">
-      <button class="btn btn-success" id="btnStart" onclick="startBot()">▶ 启动</button>
-      <button class="btn btn-danger" id="btnStop" onclick="stopBot()">■ 停止</button>
-      <button class="btn btn-warning" id="btnRestart" onclick="restartBot()">↻ 重启</button>
+    <div class="status-details">
+      <span id="stageText">状态：空闲</span>
+      <span id="pidText"></span>
+    </div>
+    <div class="progress-bar" id="progressBar">
+      <span class="progress-step" id="stepNapcat">① NapCat</span>
+      <span style="color:var(--text-dim)">→</span>
+      <span class="progress-step" id="stepQr">② 二维码</span>
+      <span style="color:var(--text-dim)">→</span>
+      <span class="progress-step" id="stepWs">③ WebSocket</span>
+      <span style="color:var(--text-dim)">→</span>
+      <span class="progress-step" id="stepBot">④ Bot 运行</span>
     </div>
   </div>
 
   <div class="grid">
+    <!-- 二维码 -->
+    <div class="card">
+      <h3>📱 扫码登录 QQ</h3>
+      <div class="qr-area">
+        <div id="qrContainer">
+          <div class="qr-placeholder">点击「一键启动」<br>二维码会自动出现</div>
+        </div>
+      </div>
+    </div>
+
     <!-- 快速配置 -->
     <div class="card">
       <h3>⚙️ 快速配置</h3>
@@ -398,24 +668,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <div class="config-label">Bot 名字 <small>群聊触发词</small></div>
         <input class="config-input" id="cfgName" value="猫娘" />
       </div>
-      <div style="margin-top:12px;text-align:right">
-        <button class="btn btn-primary" onclick="saveConfig()">💾 保存配置</button>
-      </div>
-    </div>
-
-    <!-- 快捷操作 -->
-    <div class="card">
-      <h3>🔗 快速链接</h3>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <a href="https://platform.deepseek.com" target="_blank" class="btn btn-primary" style="text-decoration:none;justify-content:center">
-          🔑 DeepSeek 控制台
-        </a>
-        <a href="https://github.com/nico10086/-bot" target="_blank" class="btn" style="text-decoration:none;justify-content:center;background:var(--border);color:var(--text)">
-          📦 GitHub 仓库
-        </a>
-        <button class="btn" onclick="openEnvFile()" style="background:var(--border);color:var(--text);justify-content:center">
-          📝 编辑 .env 文件
-        </button>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" onclick="saveConfig()">💾 保存</button>
+        <button class="btn btn-sm" onclick="startNapcatOnly()" style="background:var(--border);color:var(--text)">只启动 NapCat</button>
+        <button class="btn btn-sm" onclick="startBotOnly()" style="background:var(--border);color:var(--text)">只启动 Bot</button>
       </div>
     </div>
   </div>
@@ -424,13 +680,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
   <div class="card">
     <h3>📋 运行日志</h3>
     <div class="log-area" id="logArea">
-      <div class="log-empty">🐱 等待 Bot 启动...</div>
+      <div class="log-empty">🐱 等待启动...</div>
     </div>
   </div>
 
-  <footer>
-    猫娘 Bot · 用 💕 和 🐱 制作
-  </footer>
+  <footer>猫娘 Bot · 用 💕 和 🐱 制作</footer>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -438,13 +692,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
 <script>
 let statusTimer = null;
 
-// ── API 调用 ──
 async function api(url, method='GET', body=null) {
   const opt = { method, headers: {} };
-  if (body) {
-    opt.headers['Content-Type'] = 'application/json';
-    opt.body = JSON.stringify(body);
-  }
+  if (body) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
   const r = await fetch(url, opt);
   return r.json();
 }
@@ -457,30 +707,55 @@ function showToast(msg, ok=true) {
   setTimeout(() => t.classList.remove('show'), 3000);
 }
 
-// ── 状态 ──
+// ── 状态刷新 ──
+function setDot(id, on) {
+  document.getElementById(id).className = 'status-dot' + (on ? ' on' : '');
+}
+
 async function refreshStatus() {
   const data = await api('/api/status');
-  const dot = document.getElementById('statusDot');
-  const text = document.getElementById('statusText');
-  const pid = document.getElementById('statusPid');
-  const btnStart = document.getElementById('btnStart');
-  const btnStop = document.getElementById('btnStop');
-  const btnRestart = document.getElementById('btnRestart');
 
-  if (data.running) {
-    dot.className = 'status-dot running';
-    text.textContent = '🟢 运行中';
-    pid.textContent = `PID: ${data.pid}`;
-    btnStart.disabled = true;
-    btnStop.disabled = false;
-    btnRestart.disabled = false;
+  setDot('napcatDot', data.napcat_running);
+  document.getElementById('napcatText').textContent = data.napcat_running ? '运行中' : '已停止';
+  setDot('botDot', data.bot_running);
+  document.getElementById('botText').textContent = data.bot_running ? '运行中' : '已停止';
+  setDot('wsDot', data.ws_ready);
+  document.getElementById('wsText').textContent = data.ws_ready ? '已就绪' : '等待中';
+
+  document.getElementById('btnStart').disabled = data.bot_running;
+  document.getElementById('btnStop').disabled = !data.napcat_running && !data.bot_running;
+  document.getElementById('pidText').textContent = data.pid ? `PID: ${data.pid}` : '';
+
+  // 阶段文本
+  const stageMap = {
+    idle: '空闲', napcat: '⏳ 启动 NapCat 中...',
+    qr: '📱 二维码已生成，请扫码', websocket: '✅ WebSocket 就绪',
+    ready: '✅ NapCat 就绪，等待启动 Bot', bot_running: '🟢 运行中'
+  };
+  document.getElementById('stageText').textContent = '状态：' + (stageMap[data.stage] || data.stage);
+
+  // 进度条
+  const steps = ['stepNapcat', 'stepQr', 'stepWs', 'stepBot'];
+  const stageOrder = ['napcat', 'qr', 'websocket', 'ready', 'bot_running'];
+  const idx = stageOrder.indexOf(data.stage);
+  steps.forEach((s, i) => {
+    const el = document.getElementById(s);
+    el.className = 'progress-step';
+    if (i < idx) el.classList.add('done');
+    else if (i === idx) el.classList.add('active');
+  });
+  if (data.stage === 'bot_running') {
+    steps.forEach(s => document.getElementById(s).classList.add('done'));
+  }
+
+  // 二维码
+  const qrContainer = document.getElementById('qrContainer');
+  if (data.qr_exists) {
+    qrContainer.innerHTML = `<img src="/api/qrcode?t=${Date.now()}" alt="二维码" />`;
+  } else if (data.stage !== 'idle') {
+    qrContainer.innerHTML = '<div class="qr-placeholder">⏳ 等待二维码生成...</div>';
   } else {
-    dot.className = 'status-dot';
-    text.textContent = '🔴 已停止';
-    pid.textContent = data.exit_code !== undefined ? `退出码: ${data.exit_code}` : '';
-    btnStart.disabled = false;
-    btnStop.disabled = true;
-    btnRestart.disabled = true;
+    qrContainer.innerHTML = '<div class="qr-placeholder">点击「一键启动」<br>二维码会自动出现</div>';
   }
 }
 
@@ -488,10 +763,10 @@ async function refreshLogs() {
   const data = await api('/api/logs');
   const area = document.getElementById('logArea');
   if (!data.logs || data.logs.length === 0) {
-    area.innerHTML = '<div class="log-empty">🐱 等待 Bot 启动...</div>';
+    area.innerHTML = '<div class="log-empty">🐱 等待启动...</div>';
     return;
   }
-  area.innerHTML = data.logs.map(l => `<div class="log-entry">${escapeHtml(l)}</div>`).join('');
+  area.innerHTML = data.logs.map(l => '<div class="log-entry">' + escapeHtml(l) + '</div>').join('');
   area.scrollTop = area.scrollHeight;
 }
 
@@ -509,26 +784,33 @@ function escapeHtml(text) {
 }
 
 // ── 操作 ──
-async function startBot() {
+async function startAll() {
   const data = await api('/api/start', 'POST', {});
-  showToast(data.message || '已启动');
-  refreshStatus();
+  showToast(data.message || '启动中...');
 }
 
-async function stopBot() {
+async function stopAll() {
   const data = await api('/api/stop', 'POST', {});
   showToast(data.message || '已停止');
-  refreshStatus();
 }
 
-async function restartBot() {
-  const btn = document.getElementById('btnRestart');
-  btn.disabled = true;
-  btn.textContent = '⋯ 重启中';
+async function restartAll() {
+  document.getElementById('btnRestart').disabled = true;
+  document.getElementById('btnRestart').textContent = '⋯ 重启中';
   const data = await api('/api/restart', 'POST', {});
-  showToast(data.message || '已重启');
-  btn.textContent = '↻ 重启';
-  refreshStatus();
+  showToast('重启中...');
+  document.getElementById('btnRestart').disabled = false;
+  document.getElementById('btnRestart').textContent = '↻ 重启';
+}
+
+async function startNapcatOnly() {
+  const data = await api('/api/start-napcat', 'POST', {});
+  showToast(data.message || '启动中...');
+}
+
+async function startBotOnly() {
+  const data = await api('/api/start-bot', 'POST', {});
+  showToast(data.message || '启动中...');
 }
 
 async function saveConfig() {
@@ -537,29 +819,16 @@ async function saveConfig() {
     temperature: document.getElementById('cfgTemp').value.trim(),
     BOT_NAME: document.getElementById('cfgName').value.trim(),
   };
-  // 如果 model 是 deepseek-chat，移除这个字段（用代码默认值）
   if (config.model === 'deepseek-chat') delete config.model;
-
   const data = await api('/api/config', 'POST', { config });
-  showToast(data.message || '配置已保存');
+  showToast(data.message || '已保存');
   refreshConfig();
-}
-
-function openEnvFile() {
-  // 通过 api 获取路径信息
-  window.open('https://github.com/nico10086/-bot', '_blank');
-  showToast('请在项目目录下手动编辑 .env 文件');
 }
 
 // ── 定时刷新 ──
 function startPolling() {
-  refreshStatus();
-  refreshLogs();
-  refreshConfig();
-  statusTimer = setInterval(() => {
-    refreshStatus();
-    refreshLogs();
-  }, 2000);
+  refreshStatus(); refreshLogs(); refreshConfig();
+  statusTimer = setInterval(() => { refreshStatus(); refreshLogs(); }, 2000);
 }
 
 window.onload = startPolling;
