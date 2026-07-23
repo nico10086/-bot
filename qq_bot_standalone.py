@@ -162,9 +162,10 @@ _shared_tools = None
 _llm = None
 _bot_uin: str | None = None  # 机器人自己的 QQ 号，从事件中自动获取
 
-# ── 群聊消息历史（每个群保留最近 50 条，持久化到文件） ──
+# ── 群聊消息历史（每个群保留最近 1000 条，持久化到文件） ──
 group_history: dict[str, list[dict]] = {}
-MAX_HISTORY_PER_GROUP = 50
+MAX_HISTORY_PER_GROUP = 1000       # 每个群/私聊最多存储条数
+HISTORY_CONTEXT_SIZE = 30           # 每次给 AI 看的最近条数
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "group_history.json")
 GROUP_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "group_config.json")
 
@@ -175,6 +176,22 @@ def load_group_config() -> dict:
         if os.path.exists(GROUP_CONFIG_FILE):
             with open(GROUP_CONFIG_FILE, "r", encoding="utf-8-sig") as f:
                 return json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"[警告] group_config.json 解析失败，尝试修复... {e}")
+        try:
+            with open(GROUP_CONFIG_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+            # 尝试修复常见 JSON 错误（尾部逗号等）
+            import re
+            fixed = re.sub(r',\s*([}\]])', r'\1', content)
+            data = json.loads(fixed)
+            # 修复成功，写回
+            with open(GROUP_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            print(f"[修复] group_config.json 已自动修复")
+            return data
+        except Exception:
+            print("[错误] group_config.json 无法修复")
     except Exception:
         pass
     return {}
@@ -353,7 +370,7 @@ def load_history():
 def save_history():
     """保存群聊历史到文件"""
     try:
-        # 只保存每个群最近的 N 条
+        # 只保存每个群最近的 MAX_HISTORY_PER_GROUP 条
         trimmed = {
             gid: msgs[-MAX_HISTORY_PER_GROUP:]
             for gid, msgs in group_history.items() if msgs
@@ -624,7 +641,7 @@ async def handle_msg(ws, data: dict):
 
         # ── 附加上下文：最近群聊历史 ──
         session_id = f"group_{group_id}"
-        hist = group_history.get(session_id, [])[-MAX_HISTORY_PER_GROUP:]
+        hist = group_history.get(session_id, [])[-HISTORY_CONTEXT_SIZE:]
         if hist:
             history_text = "\n".join(
                 f"{m['name']}(QQ:{m.get('uid','?')}): {m['text'][:100]}" for m in hist
@@ -645,8 +662,8 @@ async def handle_msg(ws, data: dict):
             "text": rich_text,
             "time": asyncio.get_event_loop().time(),
         })
-        # 裁剪历史到最大长度
-        if len(group_history[session_id]) > MAX_HISTORY_PER_GROUP * 2:
+        # 裁剪历史到最大长度（内存中缓存略多于文件，减少频繁写入）
+        if len(group_history[session_id]) > MAX_HISTORY_PER_GROUP + 100:
             group_history[session_id] = group_history[session_id][-MAX_HISTORY_PER_GROUP:]
         # 持久化到文件
         save_history()
@@ -661,7 +678,7 @@ async def handle_msg(ws, data: dict):
         raw_msg = data.get("raw_message", "").strip()
 
         # 附加上下文：最近私聊历史
-        hist = group_history.get(session_id, [])[-MAX_HISTORY_PER_GROUP:]
+        hist = group_history.get(session_id, [])[-HISTORY_CONTEXT_SIZE:]
         if hist:
             history_text = "\n".join(
                 f"{m['name']}(QQ:{m.get('uid','?')}): {m['text'][:100]}" for m in hist
@@ -679,7 +696,7 @@ async def handle_msg(ws, data: dict):
             "text": raw_msg,
             "time": asyncio.get_event_loop().time(),
         })
-        if len(group_history[session_id]) > MAX_HISTORY_PER_GROUP * 2:
+        if len(group_history[session_id]) > MAX_HISTORY_PER_GROUP + 100:
             group_history[session_id] = group_history[session_id][-MAX_HISTORY_PER_GROUP:]
         save_history()
 
