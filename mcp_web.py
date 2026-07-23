@@ -1,14 +1,12 @@
 """
-🌐 本地网络工具 MCP 服务 - 支持网页抓取、百科查询
-增强版：更强大的反爬绕过能力，模拟真实浏览器访问
+🌐 网络工具 MCP 服务 - 网页抓取、百科查询、网络搜索
+增强版：多重反爬绕过策略，模拟真实浏览器访问
 """
 from mcp.server.fastmcp import FastMCP
 import httpx
 from html.parser import HTMLParser
 import urllib.parse
-import json
 import random
-import re
 import ssl
 
 mcp = FastMCP("本地网络工具服务")
@@ -116,12 +114,11 @@ def http_get(
         try:
             headers = build_headers(referer=referer)
             resp = client.get(url, headers=headers, timeout=timeout)
-            # 检查是否被反爬拦截（状态码 403/429 或内容极短且含关键词）
+            # 检查是否被反爬拦截
             if resp.status_code in (403, 429):
                 content_type = resp.headers.get("content-type", "")
                 if "html" in content_type:
                     text_lower = resp.text.lower()
-                    # 检测典型反爬页面
                     if any(kw in text_lower for kw in [
                         "just a moment", "verify", "检测", "安全验证",
                         "captcha", "cf-ray", "cloudflare",
@@ -138,7 +135,6 @@ def http_get(
             resp.raise_for_status()
             return resp
         except AntiCrawlBlocked:
-            # 反爬拦截：换 UA + 加小延迟重试
             if attempt < retry:
                 import time
                 time.sleep(random.uniform(1, 3))
@@ -175,9 +171,7 @@ class TextExtractor(HTMLParser):
             "script", "style", "noscript", "svg", "canvas",
             "iframe", "video", "audio", "object", "embed",
         }
-        # 收集 meta description / keywords
         self._meta_desc = ""
-        self._title = ""
 
     def handle_starttag(self, tag, attrs):
         if tag in self._skip_tags:
@@ -189,8 +183,6 @@ class TextExtractor(HTMLParser):
                 content = attrs_dict.get("content", "")
                 if content:
                     self._meta_desc += content + " "
-        if tag == "title":
-            self._title = ""
 
     def handle_endtag(self, tag):
         if tag in self._skip_tags and self._skip_depth > 0:
@@ -207,8 +199,7 @@ class TextExtractor(HTMLParser):
         parts = []
         if self._meta_desc.strip():
             parts.append(f"📝 摘要：{self._meta_desc.strip()}")
-        result = "\n".join(parts + self.text_parts)
-        return result
+        return "\n".join(parts + self.text_parts)
 
 
 def extract_text(html: str, max_length: int = 8000) -> str:
@@ -222,7 +213,7 @@ def extract_text(html: str, max_length: int = 8000) -> str:
     cleaned = []
     for line in result.split("\n"):
         if len(line) > 500 and line.count(" ") < 3:
-            continue  # 跳过无空格的长行（通常是 base64 或乱码）
+            continue
         cleaned.append(line)
     result = "\n".join(cleaned)
     if len(result) > max_length:
@@ -295,13 +286,11 @@ def search_web(keyword: str) -> str:
 
         # ── 1. 百度百科（优先） ──
         try:
-            # 先搜百科是否存在
             search_url = f"https://baike.baidu.com/search?word={encoded}"
             resp = http_get(search_url, timeout=15)
             text = extract_text(resp.text, max_length=2000)
             if text and not any(kw in resp.text.lower()[:1000]
                                 for kw in ["没有找到", "搜索结果为空", "抱歉"]):
-                # 直接打开百科页面
                 item_url = f"https://baike.baidu.com/item/{encoded}"
                 resp2 = http_get(item_url, timeout=15,
                                  referer="https://baike.baidu.com/")
@@ -318,12 +307,11 @@ def search_web(keyword: str) -> str:
                             referer="https://www.baidu.com/")
             text = extract_text(resp.text, max_length=3000)
             if text:
-                # 过滤掉搜索框等无关内容
                 results.append(f"【网页搜索】\n{text}")
         except Exception:
             pass
 
-        # ── 3. B站搜索（作为备选，内容较丰富） ──
+        # ── 3. B站搜索（作为备选） ──
         try:
             url = f"https://search.bilibili.com/all?keyword={encoded}"
             resp = http_get(url, timeout=15,

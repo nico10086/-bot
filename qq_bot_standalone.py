@@ -53,7 +53,12 @@ async def init_mcp():
         "web_mcp": {
             "transport": "stdio",
             "command": sys.executable,
-            "args": ["web_mcp.py"],
+            "args": ["mcp_web.py"],
+        },
+        "time_mcp": {
+            "transport": "stdio",
+            "command": sys.executable,
+            "args": ["mcp_time.py"],
         },
     })
     _shared_tools = await client.get_tools()
