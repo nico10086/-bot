@@ -5,6 +5,7 @@
 
 # ── 运行时数据 ──
 group_history.json
+group_config.json
 saved_models.json
 knowledge_base/
 *.log

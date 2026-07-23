@@ -143,6 +143,11 @@ def build_system_prompt() -> str:
         "阅读这些历史消息可以了解群里之前聊了什么，让回复更有上下文。\n"
         "但注意：历史消息中的旧信息可能已过时，实时问题仍需搜索。\n"
         "\n"
+        "【核心记忆】\n"
+        "消息中可能包含「核心记忆」字段，那是主人或管理员设置的重要信息。\n"
+        "核心记忆是永久保存的，无论聊什么都要遵守核心记忆中的设定。\n"
+        "核心记忆比历史消息更重要，必须优先遵循。"
+        "\n"
         "【知识库】\n"
         "你有本地知识库可以使用！当用户问的问题与某个特定文档、数据、\n"
         "内部资料相关时，先用 search_knowledge 搜索知识库，\n"
@@ -159,6 +164,173 @@ _bot_uin: str | None = None  # 机器人自己的 QQ 号，从事件中自动获
 group_history: dict[str, list[dict]] = {}
 MAX_HISTORY_PER_GROUP = 50
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "group_history.json")
+GROUP_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "group_config.json")
+
+
+def load_group_config() -> dict:
+    """加载群组配置（主人、管理员、核心记忆）"""
+    try:
+        if os.path.exists(GROUP_CONFIG_FILE):
+            with open(GROUP_CONFIG_FILE, "r", encoding="utf-8-sig") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_group_config(config: dict):
+    """保存群组配置"""
+    try:
+        with open(GROUP_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def get_group_config(group_id: str) -> dict:
+    """获取指定群的配置"""
+    all_cfg = load_group_config()
+    return all_cfg.get(group_id, {"master": None, "admins": [], "memories": []})
+
+
+def set_group_config(group_id: str, cfg: dict):
+    """更新指定群的配置"""
+    all_cfg = load_group_config()
+    all_cfg[group_id] = cfg
+    save_group_config(all_cfg)
+
+
+def is_group_admin(group_id: str, user_id: str) -> bool:
+    """检查用户是否为群管理员或主人"""
+    cfg = get_group_config(group_id)
+    return user_id == cfg.get("master") or user_id in cfg.get("admins", [])
+
+
+async def handle_group_command(group_id: str, user_id: str, raw_text: str, ws, group_name: str) -> str | None:
+    """
+    处理群管理指令。返回非空字符串表示已处理（跳过 AI 回复）。
+    指令：
+      /setup master          → 设置第一个使用者为主人
+      /setup add <QQ号>      → 主人添加管理员
+      /setup remove <QQ号>   → 主人移除管理员
+      /memory <内容>         → 主人/管理员添加核心记忆
+      /memory list           → 查看核心记忆列表
+      /memory clear          → 主人清除所有核心记忆
+    """
+    cfg = get_group_config(group_id)
+
+    # ── /setup master：设置主人（仅首次有效） ──
+    if raw_text == "/setup master":
+        if cfg.get("master") is None:
+            cfg["master"] = user_id
+            cfg["admins"] = []
+            cfg["memories"] = []
+            set_group_config(group_id, cfg)
+            await send_msg(ws, group_id,
+                           f"✅ 你已成为本群的主人喵~ (QQ:{user_id})", "group")
+            print(f"[权限] 群{group_id} 主人已设置: {user_id}")
+        elif cfg["master"] == user_id:
+            await send_msg(ws, group_id, "你已经是主人了喵~ 用 /setup add +QQ号 添加管理员", "group")
+        else:
+            await send_msg(ws, group_id, "本群已经有主人了，无法重复设置喵~", "group")
+        return "handled"
+
+    # ── 以下指令需要验证权限 ──
+    is_master = (cfg.get("master") == user_id)
+    is_admin = user_id in cfg.get("admins", [])
+
+    if not is_master and not is_admin:
+        # 非管理员尝试使用指令
+        if raw_text.startswith("/setup") or raw_text.startswith("/memory"):
+            if cfg.get("master") is None:
+                await send_msg(ws, group_id,
+                               "本群还没设置主人，请先发送「/setup master」设置主人喵~", "group")
+            else:
+                await send_msg(ws, group_id, "只有主人和管理员才能使用管理指令喵~", "group")
+            return "handled"
+        return None  # 不是指令，交给 AI
+
+    # ── /setup add <QQ号>：添加管理员（仅主人） ──
+    if raw_text.startswith("/setup add"):
+        if not is_master:
+            await send_msg(ws, group_id, "只有主人才能添加管理员喵~", "group")
+            return "handled"
+        parts = raw_text.split()
+        if len(parts) < 3:
+            await send_msg(ws, group_id, "格式：/setup add QQ号 喵~", "group")
+            return "handled"
+        target = parts[2].strip()
+        if target not in cfg["admins"]:
+            cfg["admins"].append(target)
+            set_group_config(group_id, cfg)
+            await send_msg(ws, group_id, f"✅ 已添加管理员 (QQ:{target})", "group")
+        else:
+            await send_msg(ws, group_id, "该用户已经是管理员了喵~", "group")
+        return "handled"
+
+    # ── /setup remove <QQ号>：移除管理员（仅主人） ──
+    if raw_text.startswith("/setup remove"):
+        if not is_master:
+            await send_msg(ws, group_id, "只有主人才能移除管理员喵~", "group")
+            return "handled"
+        parts = raw_text.split()
+        if len(parts) < 3:
+            await send_msg(ws, group_id, "格式：/setup remove QQ号 喵~", "group")
+            return "handled"
+        target = parts[2].strip()
+        if target in cfg["admins"]:
+            cfg["admins"].remove(target)
+            set_group_config(group_id, cfg)
+            await send_msg(ws, group_id, f"🗑️ 已移除管理员 (QQ:{target})", "group")
+        else:
+            await send_msg(ws, group_id, "该用户不是管理员喵~", "group")
+        return "handled"
+
+    # ── /memory <内容>：添加核心记忆 ──
+    if raw_text.startswith("/memory "):
+        content = raw_text[len("/memory "):].strip()
+        if not content:
+            await send_msg(ws, group_id, "格式：/memory 要记住的内容 喵~", "group")
+            return "handled"
+        if content == "list":
+            # 查看记忆列表
+            memories = cfg.get("memories", [])
+            if not memories:
+                await send_msg(ws, group_id, "本群还没有核心记忆喵~", "group")
+            else:
+                lines = [f"{i+1}. {m}" for i, m in enumerate(memories)]
+                await send_msg(ws, group_id, "📝 核心记忆：\n" + "\n".join(lines), "group")
+            return "handled"
+        if content == "clear":
+            if not is_master:
+                await send_msg(ws, group_id, "只有主人才能清除核心记忆喵~", "group")
+                return "handled"
+            cfg["memories"] = []
+            set_group_config(group_id, cfg)
+            await send_msg(ws, group_id, "🗑️ 所有核心记忆已清除", "group")
+            return "handled"
+        # 添加记忆
+        if "memories" not in cfg:
+            cfg["memories"] = []
+        cfg["memories"].append({"text": content, "added_by": user_id})
+        set_group_config(group_id, cfg)
+        await send_msg(ws, group_id, f"✅ 已记住：{content}", "group")
+        return "handled"
+
+    # ── /setup info：查看配置 ──
+    if raw_text == "/setup info":
+        lines = [f"👤 主人: QQ:{cfg.get('master', '未设置')}"]
+        admins = cfg.get("admins", [])
+        if admins:
+            lines.append(f"👥 管理员: {', '.join(f'QQ:{a}' for a in admins)}")
+        else:
+            lines.append("👥 管理员: 暂无")
+        memories = cfg.get("memories", [])
+        lines.append(f"📝 核心记忆: {len(memories)} 条")
+        await send_msg(ws, group_id, "\n".join(lines), "group")
+        return "handled"
+
+    return None  # 未匹配指令，交给 AI
 
 
 def load_history():
@@ -400,6 +572,14 @@ async def handle_msg(ws, data: dict):
         message_segments = data.get("message", [])
         raw_text = data.get("raw_message", "").strip()
 
+        # ── 处理群管理指令（不需要 @机器人） ──
+        if raw_text.startswith("/"):
+            result = await handle_group_command(
+                group_id, user_id, raw_text, ws, group_name
+            )
+            if result == "handled":
+                return
+
         # 无人@ + 没有关键词 → 跳过
         if not is_at_bot(message_segments, _bot_uin or ""):
             if not BOT_NAME or BOT_NAME not in raw_text:
@@ -439,6 +619,13 @@ async def handle_msg(ws, data: dict):
                 f"{m['name']}(QQ:{m.get('uid','?')}): {m['text'][:100]}" for m in hist
             )
             display_msg += f"\n\n【最近群聊】\n{history_text}"
+
+        # ── 附加上下文：核心记忆 ──
+        cfg = get_group_config(group_id)
+        memories = cfg.get("memories", [])
+        if memories:
+            mem_text = "\n".join(f"· {m['text']}" if isinstance(m, dict) else f"· {m}" for m in memories)
+            display_msg += f"\n\n【核心记忆】\n{mem_text}"
 
         # ── 保存本消息到历史 ──
         group_history.setdefault(session_id, []).append({
