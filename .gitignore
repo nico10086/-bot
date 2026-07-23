@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# ── 运行时数据 ──
+group_history.json
+
 # ── Python 虚拟环境 ──
 env/
 .env/

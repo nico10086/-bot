@@ -27,9 +27,39 @@ _shared_tools = None
 _llm = None
 _bot_uin: str | None = None  # 机器人自己的 QQ 号，从事件中自动获取
 
-# ── 群聊消息历史（每个群保留最近 30 条） ──
+# ── 群聊消息历史（每个群保留最近 50 条，持久化到文件） ──
 group_history: dict[str, list[dict]] = {}
-MAX_HISTORY_PER_GROUP = 30
+MAX_HISTORY_PER_GROUP = 50
+HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "group_history.json")
+
+
+def load_history():
+    """从文件加载群聊历史"""
+    global group_history
+    try:
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # 只保留最近的记录，兼容旧格式
+                if isinstance(data, dict):
+                    group_history = data
+                    print(f"[历史] 已加载 {sum(len(v) for v in data.values())} 条历史消息")
+    except Exception as e:
+        print(f"[历史] 加载失败: {e}")
+
+
+def save_history():
+    """保存群聊历史到文件"""
+    try:
+        # 只保存每个群最近的 N 条
+        trimmed = {
+            gid: msgs[-MAX_HISTORY_PER_GROUP:]
+            for gid, msgs in group_history.items() if msgs
+        }
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(trimmed, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 # ── 你的角色设定 ──
 SYSTEM_PROMPT = (
@@ -316,6 +346,8 @@ async def handle_msg(ws, data: dict):
         # 裁剪历史到最大长度
         if len(group_history[group_id]) > MAX_HISTORY_PER_GROUP * 2:
             group_history[group_id] = group_history[group_id][-MAX_HISTORY_PER_GROUP:]
+        # 持久化到文件
+        save_history()
 
         target_id = group_id
         target_type = "group"
@@ -356,6 +388,10 @@ async def handle_msg(ws, data: dict):
 
 
 async def main():
+    # 加载持久化的群聊历史
+    load_history()
+    print(f"[历史] 群聊历史文件: {HISTORY_FILE}")
+
     await init_mcp()
     print(f"[WS] 正在连接 {WS_URL} ...")
     async for ws in connect(WS_URL, ping_interval=30):
