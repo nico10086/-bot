@@ -130,6 +130,8 @@ def find_qq_path() -> str | None:
                 key = winreg.OpenKey(hive, subkey)
                 val, _ = winreg.QueryValueEx(key, "UninstallString")
                 winreg.CloseKey(key)
+                # 注册表值可能带引号，需要去除
+                val = val.strip('\"').strip()
                 qq_path = os.path.join(os.path.dirname(val), "QQ.exe")
                 if os.path.exists(qq_path):
                     return qq_path

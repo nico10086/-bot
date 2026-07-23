@@ -7,3 +7,5 @@ langgraph>=1.2
 mcp>=1.28
 httpx[http2]>=0.28
 websockets>=15.0
+pystray>=0.19
+Pillow>=10.0
