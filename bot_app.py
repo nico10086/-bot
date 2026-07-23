@@ -506,31 +506,45 @@ class BotApp:
                                      **btn_style)
         self.btn_restart.pack(side="left", padx=(0, 8))
 
-        # ── 配置行 1：性格 + 模型 ──
+        # ── 配置行 1：选择已保存的模型 ──
         config_frame = tk.Frame(parent, bg=self.BG)
         config_frame.pack(fill="x", padx=20, pady=(4, 2))
 
-        tk.Label(config_frame, text="性格：", font=self.FONT_SM,
+        tk.Label(config_frame, text="已保存模型：", font=self.FONT_SM,
                  fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
-        self.personality_var = tk.StringVar(value="catgirl")
-        self.personality_menu = tk.OptionMenu(
-            config_frame, self.personality_var,
-            "catgirl", "tsundere",
-            command=lambda _: self._save_config()
+        self.saved_model_var = tk.StringVar(value="")
+        self.saved_model_menu = tk.OptionMenu(
+            config_frame, self.saved_model_var, "",
+            command=lambda _: self._on_select_saved_model()
         )
-        self.personality_menu.config(
+        self.saved_model_menu.config(
             bg=self.CARD, fg=self.TEXT, font=self.FONT_SM,
-            highlightthickness=0, border=0,
+            highlightthickness=0, border=0, width=14,
         )
-        self.personality_menu.pack(side="left", padx=(0, 12))
+        self.saved_model_menu.pack(side="left", padx=(0, 8))
 
-        tk.Label(config_frame, text="提供商：", font=self.FONT_SM,
+        self.btn_save_model = tk.Button(config_frame, text="➕ 保存当前模型",
+                                        bg=self.CARD, fg=self.TEXT,
+                                        font=self.FONT_SM, border=0, cursor="hand2",
+                                        command=self._save_current_as_model)
+        self.btn_save_model.pack(side="left", padx=(0, 4))
+
+        self.btn_del_model = tk.Button(config_frame, text="✖ 删除",
+                                       bg=self.CARD, fg=self.RED,
+                                       font=self.FONT_SM, border=0, cursor="hand2",
+                                       command=self._delete_saved_model)
+        self.btn_del_model.pack(side="left", padx=(0, 12))
+
+        # ── 配置行 2：提供商 + 模型名 ──
+        config_frame2 = tk.Frame(parent, bg=self.BG)
+        config_frame2.pack(fill="x", padx=20, pady=(2, 2))
+
+        tk.Label(config_frame2, text="提供商：", font=self.FONT_SM,
                  fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
         self.provider_var = tk.StringVar(value="deepseek")
         self.provider_menu = tk.OptionMenu(
-            config_frame, self.provider_var,
+            config_frame2, self.provider_var,
             "deepseek",
-            command=lambda _: self._on_provider_change()
         )
         self.provider_menu.config(
             bg=self.CARD, fg=self.TEXT, font=self.FONT_SM,
@@ -538,35 +552,48 @@ class BotApp:
         )
         self.provider_menu.pack(side="left", padx=(0, 12))
 
-        tk.Label(config_frame, text="模型名：", font=self.FONT_SM,
+        tk.Label(config_frame2, text="模型名：", font=self.FONT_SM,
                  fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
-        self.cfg_model = tk.Entry(config_frame, font=self.FONT_SM,
+        self.cfg_model = tk.Entry(config_frame2, font=self.FONT_SM,
                                   bg=self.CARD, fg=self.TEXT,
-                                  border=0, width=14, insertbackground=self.TEXT)
+                                  border=0, width=20, insertbackground=self.TEXT)
         self.cfg_model.pack(side="left", padx=(0, 12))
         self.cfg_model.insert(0, "deepseek-chat")
 
-        # ── 配置行 2：API Key + Temp + 保存 ──
-        config_frame2 = tk.Frame(parent, bg=self.BG)
-        config_frame2.pack(fill="x", padx=20, pady=(2, 4))
+        # ── 配置行 3：API Key + Temp + 性格 ──
+        config_frame3 = tk.Frame(parent, bg=self.BG)
+        config_frame3.pack(fill="x", padx=20, pady=(2, 4))
 
-        tk.Label(config_frame2, text="API Key：", font=self.FONT_SM,
+        tk.Label(config_frame3, text="API Key：", font=self.FONT_SM,
                  fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
-        self.cfg_apikey = tk.Entry(config_frame2, font=self.FONT_SM,
+        self.cfg_apikey = tk.Entry(config_frame3, font=self.FONT_SM,
                                    bg=self.CARD, fg=self.TEXT,
-                                   border=0, width=30, insertbackground=self.TEXT,
-                                   show="*")  # 密码模式隐藏密钥
-        self.cfg_apikey.pack(side="left", padx=(0, 12))
+                                   border=0, width=26, insertbackground=self.TEXT,
+                                   show="*")
+        self.cfg_apikey.pack(side="left", padx=(0, 8))
 
-        tk.Label(config_frame2, text="Temp：", font=self.FONT_SM,
+        tk.Label(config_frame3, text="Temp：", font=self.FONT_SM,
                  fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
-        self.cfg_temp = tk.Entry(config_frame2, font=self.FONT_SM,
+        self.cfg_temp = tk.Entry(config_frame3, font=self.FONT_SM,
                                  bg=self.CARD, fg=self.TEXT,
                                  border=0, width=5, insertbackground=self.TEXT)
-        self.cfg_temp.pack(side="left", padx=(0, 12))
+        self.cfg_temp.pack(side="left", padx=(0, 8))
         self.cfg_temp.insert(0, "0.7")
 
-        self.btn_save_config = tk.Button(config_frame2, text="💾 保存配置",
+        tk.Label(config_frame3, text="性格：", font=self.FONT_SM,
+                 fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
+        self.personality_var = tk.StringVar(value="catgirl")
+        self.personality_menu = tk.OptionMenu(
+            config_frame3, self.personality_var,
+            "catgirl", "tsundere",
+        )
+        self.personality_menu.config(
+            bg=self.CARD, fg=self.TEXT, font=self.FONT_SM,
+            highlightthickness=0, border=0,
+        )
+        self.personality_menu.pack(side="left", padx=(0, 8))
+
+        self.btn_save_config = tk.Button(config_frame3, text="💾 应用配置",
                                          bg=self.PINK, fg="white",
                                          font=self.FONT_SM, border=0, cursor="hand2",
                                          command=self._save_config)
@@ -586,14 +613,19 @@ class BotApp:
         self.btn_bot_only.pack(side="right", padx=(4, 0))
 
     def _save_config(self, *args):
-        """保存所有配置到 .env"""
+        """保存当前配置到 .env"""
         env = load_env()
+        selected = self.saved_model_var.get()
+        if selected:
+            env["SELECTED_MODEL"] = selected
+        else:
+            env.pop("SELECTED_MODEL", None)
+            env["MODEL_PROVIDER"] = self.provider_var.get()
+            env["MODEL_NAME"] = self.cfg_model.get().strip()
+            api_key = self.cfg_apikey.get().strip()
+            if api_key:
+                env["API_KEY"] = api_key
         env["BOT_PERSONALITY"] = self.personality_var.get()
-        env["MODEL_PROVIDER"] = self.provider_var.get()
-        env["MODEL_NAME"] = self.cfg_model.get().strip()
-        api_key = self.cfg_apikey.get().strip()
-        if api_key:
-            env["API_KEY"] = api_key
         temp = self.cfg_temp.get().strip()
         if temp:
             env["temperature"] = temp
@@ -602,16 +634,6 @@ class BotApp:
         s = get_status()
         if s["bot"]:
             add_log("💡 重启 Bot 后生效")
-
-    def _on_provider_change(self, *args):
-        """提供商切换时自动填充默认模型名"""
-        provider = self.provider_var.get()
-        defaults = {
-            "deepseek": "deepseek-chat",
-        }
-        if provider in defaults:
-            self.cfg_model.delete(0, "end")
-            self.cfg_model.insert(0, defaults[provider])
 
     def _build_qrcode(self, parent):
         """二维码显示区域（左侧）"""
@@ -726,27 +748,119 @@ class BotApp:
         self.root.after(2000, self._refresh_timer)
 
     def _load_config_to_ui(self):
-        """加载 .env 配置到 UI 控件"""
+        """加载 .env 和已保存模型配置到 UI"""
         env = load_env()
+        self._refresh_saved_models()
         personality = env.get("BOT_PERSONALITY", "catgirl")
         if personality in ("catgirl", "tsundere"):
             self.personality_var.set(personality)
-        provider = env.get("MODEL_PROVIDER", "deepseek")
-        self.provider_var.set(provider)
-        model = env.get("MODEL_NAME", "deepseek-chat")
-        if model:
-            self.cfg_model.delete(0, "end")
-            self.cfg_model.insert(0, model)
-        api_key = env.get("API_KEY", "")
-        if api_key:
-            self.cfg_apikey.delete(0, "end")
-            self.cfg_apikey.insert(0, api_key)
-        temp = env.get("temperature", "0.7")
-        if temp:
-            self.cfg_temp.delete(0, "end")
-            self.cfg_temp.insert(0, temp)
+        selected = env.get("SELECTED_MODEL", "")
+        if selected:
+            self.saved_model_var.set(selected)
+            self._fill_from_saved_model(selected)
+        else:
+            provider = env.get("MODEL_PROVIDER", "deepseek")
+            self.provider_var.set(provider)
+            model = env.get("MODEL_NAME", "deepseek-chat")
+            if model:
+                self.cfg_model.delete(0, "end")
+                self.cfg_model.insert(0, model)
+            api_key = env.get("API_KEY", "")
+            if api_key:
+                self.cfg_apikey.delete(0, "end")
+                self.cfg_apikey.insert(0, api_key)
+            temp = env.get("temperature", "0.7")
+            if temp:
+                self.cfg_temp.delete(0, "end")
+                self.cfg_temp.insert(0, temp)
 
-    # ── 托盘 ──
+    def _refresh_saved_models(self):
+        """刷新已保存模型下拉列表"""
+        models = self._load_models_json()
+        menu = self.saved_model_menu["menu"]
+        menu.delete(0, "end")
+        names = list(models.keys())
+        menu.add_command(label="（无）", command=lambda: self.saved_model_var.set(""))
+        for name in names:
+            menu.add_command(label=name, command=lambda n=name: self._on_select_saved_model(n))
+        if self.saved_model_var.get() not in names:
+            self.saved_model_var.set("")
+
+    def _load_models_json(self) -> dict:
+        path = os.path.join(BASE_DIR, "saved_models.json")
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_models_json(self, models: dict):
+        path = os.path.join(BASE_DIR, "saved_models.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(models, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _on_select_saved_model(self, name=None):
+        if name is None:
+            name = self.saved_model_var.get()
+        if not name:
+            return
+        self.saved_model_var.set(name)
+        self._fill_from_saved_model(name)
+
+    def _fill_from_saved_model(self, name: str):
+        models = self._load_models_json()
+        entry = models.get(name)
+        if not entry:
+            return
+        self.provider_var.set(entry.get("provider", "deepseek"))
+        self.cfg_model.delete(0, "end")
+        self.cfg_model.insert(0, entry.get("model_name", ""))
+        self.cfg_apikey.delete(0, "end")
+        self.cfg_apikey.insert(0, entry.get("api_key", ""))
+
+    def _save_current_as_model(self):
+        from tkinter.simpledialog import askstring
+        name = askstring("保存模型", "给这个模型起个名字：", parent=self.root)
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        models = self._load_models_json()
+        models[name] = {
+            "provider": self.provider_var.get(),
+            "model_name": self.cfg_model.get().strip(),
+            "api_key": self.cfg_apikey.get().strip(),
+        }
+        self._save_models_json(models)
+        self._refresh_saved_models()
+        self.saved_model_var.set(name)
+        env = load_env()
+        env["SELECTED_MODEL"] = name
+        save_env(env)
+        add_log(f"✅ 模型「{name}」已保存")
+
+    def _delete_saved_model(self):
+        name = self.saved_model_var.get()
+        if not name:
+            return
+        from tkinter.messagebox import askyesno
+        ok = askyesno("确认删除", f"确定要删除模型「{name}」吗？", parent=self.root)
+        if not ok:
+            return
+        models = self._load_models_json()
+        if name in models:
+            del models[name]
+        self._save_models_json(models)
+        self._refresh_saved_models()
+        self.saved_model_var.set("")
+        env = load_env()
+        env.pop("SELECTED_MODEL", None)
+        save_env(env)
+        add_log(f"🗑️ 模型「{name}」已删除")
     def _minimize_to_tray(self):
         global _minimize_choice
         # 第一次点击叉：询问用户

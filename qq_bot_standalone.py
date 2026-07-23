@@ -25,30 +25,66 @@ BOT_PERSONALITY = os.getenv("BOT_PERSONALITY", "catgirl")  # 性格
 MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "deepseek")  # 提供商
 MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-chat")     # 模型名
 API_KEY = os.getenv("API_KEY", "")                        # API 密钥
+SELECTED_MODEL = os.getenv("SELECTED_MODEL", "")           # 选中的保存的模型名
 
 MODEL_PROVIDERS = {
     "deepseek": {
         "name": "DeepSeek",
         "base_url": "https://api.deepseek.com/v1",
         "default_model": "deepseek-chat",
-        "env_key": "API_KEY",
     },
-    # 以后可以在这里添加新提供商，例如：
+    # 以后可扩展：
     # "openai": {
     #     "name": "OpenAI",
     #     "base_url": "https://api.openai.com/v1",
     #     "default_model": "gpt-4o-mini",
-    #     "env_key": "API_KEY",
     # },
 }
 
+SAVED_MODELS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_models.json")
+
+
+def load_saved_models() -> dict:
+    """加载已保存的模型列表"""
+    try:
+        if os.path.exists(SAVED_MODELS_FILE):
+            with open(SAVED_MODELS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_saved_models(models: dict):
+    """保存模型列表到文件"""
+    try:
+        with open(SAVED_MODELS_FILE, "w", encoding="utf-8") as f:
+            json.dump(models, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def get_model_config() -> dict:
-    """获取模型配置"""
+    """获取当前模型配置"""
+    # 优先使用选中的已保存模型
+    if SELECTED_MODEL:
+        saved = load_saved_models()
+        if SELECTED_MODEL in saved:
+            entry = saved[SELECTED_MODEL]
+            provider = MODEL_PROVIDERS.get(entry.get("provider", "deepseek"), MODEL_PROVIDERS["deepseek"])
+            return {
+                "model": entry.get("model_name", provider["default_model"]),
+                "api_key": entry.get("api_key", API_KEY or os.getenv("DEEPSEEK_API_KEY", "")),
+                "base_url": provider["base_url"],
+                "label": SELECTED_MODEL,
+            }
+    # 回退到 .env 配置
     provider = MODEL_PROVIDERS.get(MODEL_PROVIDER, MODEL_PROVIDERS["deepseek"])
     return {
         "model": MODEL_NAME or provider["default_model"],
         "api_key": API_KEY or os.getenv("DEEPSEEK_API_KEY", ""),
         "base_url": provider["base_url"],
+        "label": MODEL_NAME or provider["default_model"],
     }
 
 # ── 性格模板 ──

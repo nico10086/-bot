@@ -5,6 +5,7 @@
 
 # ── 运行时数据 ──
 group_history.json
+saved_models.json
 
 # ── Python 虚拟环境 ──
 env/
