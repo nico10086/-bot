@@ -9,8 +9,6 @@ import json
 import subprocess
 import threading
 import time
-import signal
-import io
 import tkinter as tk
 from tkinter import scrolledtext, font, messagebox
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -264,9 +262,13 @@ def start_all():
     try:
         if _bot_process and _bot_process.poll() is None:
             add_log("🐱 猫娘已经在运行了喵~")
+            _starting_lock.release()
             return
         r = start_napcat()
         add_log(r)
+        if "失败" in r:
+            _starting_lock.release()
+            return
 
         def auto_bot():
             try:
@@ -734,7 +736,7 @@ class BotApp:
                 # 只追加新日志
                 current_count = int(self.log_area.get("1.0", "end-1c").count("\n"))
                 if current_count < len(_log_lines):
-                    for line in _log_lines[current_count - 1 if current_count > 0 else 0:]:
+                    for line in _log_lines[current_count:]:
                         tag = "info"
                         if "✅" in line or "已启动" in line or "成功" in line:
                             tag = "ok"
@@ -874,7 +876,11 @@ class BotApp:
         save_env(env)
         add_log(f"🗑️ 模型「{name}」已删除")
     def _minimize_to_tray(self):
-        global _minimize_choice
+        global _minimize_choice, _tray_icon
+        # 防止重复启动托盘
+        if _tray_icon is not None and _tray_icon.visible:
+            self.root.withdraw()
+            return
         # 第一次点击叉：询问用户
         if _minimize_choice is None:
             choice = tk.messagebox.askyesnocancel(

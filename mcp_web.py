@@ -7,7 +7,6 @@ import httpx
 from html.parser import HTMLParser
 import urllib.parse
 import random
-import ssl
 
 mcp = FastMCP("本地网络工具服务")
 

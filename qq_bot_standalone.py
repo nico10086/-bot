@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -444,7 +445,6 @@ async def handle_msg(ws, data: dict):
 
         target_id = group_id
         target_type = "group"
-        session_id = f"group_{group_id}"
     else:
         # 私聊直接处理
         target_id = user_id

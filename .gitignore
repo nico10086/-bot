@@ -7,6 +7,8 @@
 group_history.json
 saved_models.json
 knowledge_base/
+*.log
+logs/
 
 # ── Python 虚拟环境 ──
 env/

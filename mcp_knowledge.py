@@ -165,7 +165,14 @@ def search_knowledge(keyword: str) -> str:
 
     for f in files:
         try:
-            content = read_file(f)
+            # 对文本文件直接读取原始内容搜索，避免截断漏掉
+            ext = os.path.splitext(f)[1].lower()
+            if ext in (".txt", ".md", ".csv", ".json"):
+                with open(f, "r", encoding="utf-8", errors="ignore") as fp:
+                    raw_content = fp.read()
+                content = f"📄 {os.path.basename(f)}\n{'─'*20}\n{raw_content}"
+            else:
+                content = read_file(f)
             lines = content.split("\n")
             matched_lines = []
             for i, line in enumerate(lines, 1):
