@@ -410,7 +410,8 @@ async def handle_msg(ws, data: dict):
         display_msg = f"[群:{group_name}] {display_name} 说: {rich_text}\n{member_summary}"
 
         # ── 附加上下文：最近群聊历史 ──
-        hist = group_history.get(group_id, [])[-MAX_HISTORY_PER_GROUP:]
+        session_id = f"group_{group_id}"
+        hist = group_history.get(session_id, [])[-MAX_HISTORY_PER_GROUP:]
         if hist:
             history_text = "\n".join(
                 f"{m['name']}: {m['text'][:100]}" for m in hist
@@ -418,14 +419,14 @@ async def handle_msg(ws, data: dict):
             display_msg += f"\n\n【最近群聊】\n{history_text}"
 
         # ── 保存本消息到历史 ──
-        group_history.setdefault(group_id, []).append({
+        group_history.setdefault(session_id, []).append({
             "name": display_name,
             "text": rich_text,
             "time": asyncio.get_event_loop().time(),
         })
         # 裁剪历史到最大长度
-        if len(group_history[group_id]) > MAX_HISTORY_PER_GROUP * 2:
-            group_history[group_id] = group_history[group_id][-MAX_HISTORY_PER_GROUP:]
+        if len(group_history[session_id]) > MAX_HISTORY_PER_GROUP * 2:
+            group_history[session_id] = group_history[session_id][-MAX_HISTORY_PER_GROUP:]
         # 持久化到文件
         save_history()
 
