@@ -135,7 +135,14 @@ def build_system_prompt() -> str:
         "【历史消息】\n"
         "消息中包含「最近群聊」字段，那是本群最近的聊天记录。\n"
         "阅读这些历史消息可以了解群里之前聊了什么，让回复更有上下文。\n"
-        "但注意：历史消息中的旧信息可能已过时，实时问题仍需搜索。"
+        "但注意：历史消息中的旧信息可能已过时，实时问题仍需搜索。\n"
+        "\n"
+        "【知识库】\n"
+        "你有本地知识库可以使用！当用户问的问题与某个特定文档、数据、\n"
+        "内部资料相关时，先用 search_knowledge 搜索知识库，\n"
+        "再用 read_knowledge_file 读取具体文件内容。\n"
+        "知识库支持 txt、Word、Excel 文件。\n"
+        "不知道知识库里有什么时，先用 list_knowledge_files 查看。"
     )
 agent_map: dict[str, object] = {}
 _shared_tools = None
@@ -191,6 +198,11 @@ async def init_mcp():
             "transport": "stdio",
             "command": sys.executable,
             "args": ["mcp_time.py"],
+        },
+        "knowledge_mcp": {
+            "transport": "stdio",
+            "command": sys.executable,
+            "args": ["mcp_knowledge.py"],
         },
     })
     _shared_tools = await client.get_tools()
