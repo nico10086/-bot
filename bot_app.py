@@ -618,6 +618,10 @@ class BotApp:
         selected = self.saved_model_var.get()
         if selected:
             env["SELECTED_MODEL"] = selected
+            # 确保选中已保存模型时，API Key 从模型文件同步到 .env（兼容旧版）
+            saved = self._load_models_json()
+            if selected in saved and saved[selected].get("api_key"):
+                env["API_KEY"] = saved[selected]["api_key"]
         else:
             env.pop("SELECTED_MODEL", None)
             env["MODEL_PROVIDER"] = self.provider_var.get()
@@ -754,25 +758,30 @@ class BotApp:
         personality = env.get("BOT_PERSONALITY", "catgirl")
         if personality in ("catgirl", "tsundere"):
             self.personality_var.set(personality)
+        # 温度
+        temp = env.get("temperature", "0.7")
+        if temp:
+            self.cfg_temp.delete(0, "end")
+            self.cfg_temp.insert(0, temp)
+        # 优先使用已保存模型
         selected = env.get("SELECTED_MODEL", "")
-        if selected:
+        saved_models = self._load_models_json()
+        if selected and selected in saved_models:
             self.saved_model_var.set(selected)
             self._fill_from_saved_model(selected)
         else:
+            self.saved_model_var.set("")
             provider = env.get("MODEL_PROVIDER", "deepseek")
             self.provider_var.set(provider)
             model = env.get("MODEL_NAME", "deepseek-chat")
             if model:
                 self.cfg_model.delete(0, "end")
                 self.cfg_model.insert(0, model)
-            api_key = env.get("API_KEY", "")
+            # 兼容旧版 DEEPSEEK_API_KEY 和新版 API_KEY
+            api_key = env.get("API_KEY") or env.get("DEEPSEEK_API_KEY", "")
             if api_key:
                 self.cfg_apikey.delete(0, "end")
                 self.cfg_apikey.insert(0, api_key)
-            temp = env.get("temperature", "0.7")
-            if temp:
-                self.cfg_temp.delete(0, "end")
-                self.cfg_temp.insert(0, temp)
 
     def _refresh_saved_models(self):
         """刷新已保存模型下拉列表"""
@@ -790,7 +799,7 @@ class BotApp:
         path = os.path.join(BASE_DIR, "saved_models.json")
         try:
             if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, "r", encoding="utf-8-sig") as f:
                     return json.load(f)
         except Exception:
             pass

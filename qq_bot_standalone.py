@@ -48,7 +48,7 @@ def load_saved_models() -> dict:
     """加载已保存的模型列表"""
     try:
         if os.path.exists(SAVED_MODELS_FILE):
-            with open(SAVED_MODELS_FILE, "r", encoding="utf-8") as f:
+            with open(SAVED_MODELS_FILE, "r", encoding="utf-8-sig") as f:
                 return json.load(f)
     except Exception:
         pass
