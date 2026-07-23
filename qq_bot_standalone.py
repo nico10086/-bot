@@ -357,7 +357,29 @@ async def handle_msg(ws, data: dict):
         target_id = user_id
         target_type = "private"
         session_id = f"private_{user_id}"
-        display_msg = data.get("raw_message", "").strip()
+        raw_msg = data.get("raw_message", "").strip()
+
+        # 附加上下文：最近私聊历史
+        hist = group_history.get(session_id, [])[-MAX_HISTORY_PER_GROUP:]
+        if hist:
+            history_text = "\n".join(
+                f"{m['name']}: {m['text'][:100]}" for m in hist
+            )
+            display_msg = f"{raw_msg}\n\n【最近私聊】\n{history_text}"
+        else:
+            display_msg = raw_msg
+
+        # ── 保存本消息到历史 ──
+        sender = data.get("sender", {})
+        display_name = sender.get("nickname") or f"QQ{user_id}"
+        group_history.setdefault(session_id, []).append({
+            "name": display_name,
+            "text": raw_msg,
+            "time": asyncio.get_event_loop().time(),
+        })
+        if len(group_history[session_id]) > MAX_HISTORY_PER_GROUP * 2:
+            group_history[session_id] = group_history[session_id][-MAX_HISTORY_PER_GROUP:]
+        save_history()
 
     if not display_msg:
         return
