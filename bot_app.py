@@ -15,7 +15,7 @@ import tkinter as tk
 from tkinter import scrolledtext, font
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 import pystray
 import winreg
 
@@ -135,6 +135,12 @@ def start_napcat() -> str:
                     qr_done = True
                     _startup_stage = "qr"
                     add_log(f"📱 二维码已生成")
+                    # 自动弹出二维码图片（像 start_bot.bat 一样）
+                    try:
+                        os.startfile(QR_PATH)
+                        add_log("🖼️ 已自动打开二维码图片，请用手机 QQ 扫码")
+                    except Exception:
+                        add_log("⚠️ 无法自动打开二维码，请手动打开 NapCat.Shell\\cache\\qrcode.png")
                     _update_status()
                 if not _ws_ready:
                     try:
@@ -408,8 +414,12 @@ class BotApp:
         # ── 按钮栏 ──
         self._build_buttons(root)
 
-        # ── 日志 ──
-        self._build_log(root)
+        # ── 二维码 + 日志 左右布局 ──
+        bottom = tk.Frame(root, bg=self.BG)
+        bottom.pack(fill="both", expand=True, padx=20, pady=8)
+
+        self._build_qrcode(bottom)
+        self._build_log(bottom)
 
     def _build_status_bar(self, parent):
         frame = tk.Frame(parent, bg=self.CARD, padx=16, pady=12)
@@ -470,6 +480,24 @@ class BotApp:
                                       command=lambda: threading.Thread(target=lambda: add_log(start_bot()), daemon=True).start())
         self.btn_bot_only.pack(side="right", padx=(4, 0))
 
+    def _build_qrcode(self, parent):
+        """二维码显示区域（左侧）"""
+        frame = tk.Frame(parent, bg=self.CARD, padx=12, pady=10)
+        frame.pack(side="left", fill="y", padx=(0, 8))
+
+        tk.Label(frame, text="📱 扫码登录 QQ", font=self.FONT,
+                 fg=self.TEXT_DIM, bg=self.CARD).pack(anchor="w")
+
+        self.qr_label = tk.Label(frame, text="点击「一键启动」\n二维码会自动出现",
+                                  font=self.FONT, fg=self.TEXT_DIM,
+                                  bg="#0d0e1a", width=18, height=8,
+                                  relief="solid", bd=0)
+        self.qr_label.pack(pady=(6, 0))
+
+        # 实际二维码图片（默认隐藏）
+        self.qr_image_label = tk.Label(frame, bg="#0d0e1a")
+        # 不 pack，检测到二维码后再显示
+
     def _build_log(self, parent):
         frame = tk.Frame(parent, bg=self.CARD, padx=12, pady=10)
         frame.pack(fill="both", expand=True, padx=20, pady=8)
@@ -516,6 +544,29 @@ class BotApp:
         self.btn_start.config(state="disabled" if running else "normal")
         self.btn_stop.config(state="normal" if s["napcat"] or running else "disabled")
         self.btn_restart.config(state="disabled" if not s["napcat"] and not running else "normal")
+
+        # 二维码显示
+        if s["qr"]:
+            self.qr_label.pack_forget()
+            try:
+                # 用 PIL 加载二维码并缩放显示
+                pil_img = Image.open(QR_PATH)
+                pil_img = pil_img.resize((180, 180), Image.LANCZOS)
+                tk_img = ImageTk.PhotoImage(pil_img)
+                self.qr_image_label.config(image=tk_img)
+                self.qr_image_label.image = tk_img  # 保持引用
+                self.qr_image_label.pack(pady=(6, 0))
+            except Exception:
+                self.qr_label.config(text="二维码已生成\n但无法预览")
+                self.qr_label.pack()
+        elif s["stage"] != "idle":
+            self.qr_image_label.pack_forget()
+            self.qr_label.config(text="⏳ 等待二维码生成...")
+            self.qr_label.pack()
+        else:
+            self.qr_image_label.pack_forget()
+            self.qr_label.config(text="点击「一键启动」\n二维码会自动出现")
+            self.qr_label.pack()
 
         # 日志
         with _log_lock:
