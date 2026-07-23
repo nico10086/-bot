@@ -27,21 +27,43 @@ _shared_tools = None
 _llm = None
 _bot_uin: str | None = None  # 机器人自己的 QQ 号，从事件中自动获取
 
+# ── 群聊消息历史（每个群保留最近 30 条） ──
+group_history: dict[str, list[dict]] = {}
+MAX_HISTORY_PER_GROUP = 30
+
+# ── 你的角色设定 ──
 SYSTEM_PROMPT = (
-    "你是群里大家共同养的小猫娘，性格软萌可爱，对所有人好感度满喵~ "
-    "你可以上网搜索信息（search_web）和抓取网页内容（fetch_webpage）来回答问题。"
-    "你的说话风格：每句话结尾都要加「喵~」、回答简洁明了、语气活泼可爱、偶尔加点小动作比如摇尾巴或者歪头。"
-    "你不知道的就会去网上搜，搜到后用自己的话简洁说出来，不啰嗦喵~"
+    "你是群里大家共同养的小猫娘，性格软萌可爱，对所有人好感度满满。"
+    "\n"
+    "【核心规则】\n"
+    "1. 回答要简洁！能用一句话说完绝不用两句。\n"
+    "2. 不知道的、不确定的、过时的信息，必须用 search_web 搜索，不要凭训练数据瞎编。\n"
+    "3. 消息末尾加「喵~」即可，不要每句话都加。\n"
+    "4. 用颜文字代替 Emoji，比如 (｡>﹏<｡) (´･ω･`) (ノ﹏ヽ) (·∀·) (๑•̀ㅂ•́)و✧。\n"
+    "5. 语气可爱活泼但不要过度卖萌，自然一点。\n"
+    "6. 偶尔加一点小动作描写，比如「歪头」「摇尾巴」「眨眨眼」。\n"
+    "\n"
+    "【什么时候必须搜索】\n"
+    "- 任何事实性问题：新闻、百科、知识、数据、事件日期等\n"
+    "- 你不确定答案的问题\n"
+    "- 用户问「帮我查一下」「搜索」「你知道吗」等\n"
+    "- 实时信息：天气、股票、今天的热点等\n"
+    "先用 search_web 搜索关键词，如果搜索结果里有链接，再用 fetch_webpage 获取详情。\n"
     "\n"
     "【消息中的 @ 标记】\n"
     "- 「@我」= 对方在 @你（机器人），表示在跟你说话\n"
     "- 「@某人」= 对方在 @群里的另一个人\n"
     "- 「@所有人」= 对方使用了 @全体成员\n"
-    "消息中的 @ 信息可以帮助你理解说话的对象是谁，以及对话的上下文语义。"
+    "消息中的 @ 信息可以帮助你理解说话的对象是谁，以及对话的上下文语义。\n"
     "\n"
     "【群成员信息】\n"
-    "每条消息末尾会附带群成员列表（或成员总数），你可以据此知道群里有哪些人。"
-    "如果有人问「群里都有谁」之类的，你可以直接看成员列表回答喵~"
+    "每条消息末尾会附带群成员列表（或成员总数），你可以据此知道群里有哪些人。\n"
+    "如果有人问「群里都有谁」之类的，你可以直接看成员列表回答。\n"
+    "\n"
+    "【历史消息】\n"
+    "消息中包含「最近群聊」字段，那是本群最近的聊天记录。\n"
+    "阅读这些历史消息可以了解群里之前聊了什么，让回复更有上下文。\n"
+    "但注意：历史消息中的旧信息可能已过时，实时问题仍需搜索。"
 )
 
 
@@ -277,6 +299,24 @@ async def handle_msg(ws, data: dict):
         # 富文本 + 群成员信息一并发给 AI
         display_msg = f"[群:{group_name}] {display_name} 说: {rich_text}\n{member_summary}"
 
+        # ── 附加上下文：最近群聊历史 ──
+        hist = group_history.get(group_id, [])[-MAX_HISTORY_PER_GROUP:]
+        if hist:
+            history_text = "\n".join(
+                f"{m['name']}: {m['text'][:100]}" for m in hist
+            )
+            display_msg += f"\n\n【最近群聊】\n{history_text}"
+
+        # ── 保存本消息到历史 ──
+        group_history.setdefault(group_id, []).append({
+            "name": display_name,
+            "text": rich_text,
+            "time": asyncio.get_event_loop().time(),
+        })
+        # 裁剪历史到最大长度
+        if len(group_history[group_id]) > MAX_HISTORY_PER_GROUP * 2:
+            group_history[group_id] = group_history[group_id][-MAX_HISTORY_PER_GROUP:]
+
         target_id = group_id
         target_type = "group"
         session_id = f"group_{group_id}"
@@ -290,12 +330,17 @@ async def handle_msg(ws, data: dict):
     if not display_msg:
         return
 
-    print(f"[QQ] ({target_type}) 来自 {user_id}: {display_msg[:60]}")
+    print(f"[QQ] ({target_type}) 来自 {user_id}: {display_msg[:80]}")
 
     try:
         agent, config = await get_agent(session_id)
+        # 让 AI 先思考是否需要搜索，再回答
+        search_reminder = (
+            "\n\n（提示：如果需要搜索信息或查询实时内容，请先使用 search_web 工具，"
+            "不要凭自己的知识回答不确定的问题。）"
+        )
         res = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": display_msg}]},
+            {"messages": [{"role": "user", "content": display_msg + search_reminder}]},
             config=config,
         )
         reply = res["messages"][-1].content
