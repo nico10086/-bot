@@ -41,6 +41,7 @@ _log_lock = threading.Lock()
 _tray_icon: pystray.Icon | None = None
 _main_window: tk.Tk | None = None
 _minimize_choice: str | None = None  # "tray"=最小化到托盘, "quit"=退出, None=未选择
+_starting_lock = threading.Lock()  # 防止重复点击启动
 
 
 # ============================================================
@@ -121,7 +122,7 @@ def start_napcat() -> str:
             [NAPCAT_LAUNCHER, qq_path, NAPCAT_INJECT],
             cwd=NAPCAT_DIR, env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         _startup_stage = "napcat"
         _ws_ready = False
@@ -135,18 +136,14 @@ def start_napcat() -> str:
                 if not qr_done and os.path.exists(QR_PATH):
                     qr_done = True
                     _startup_stage = "qr"
-                    add_log(f"📱 二维码已生成")
-                    # 自动弹出二维码图片（像 start_bot.bat 一样）
-                    try:
-                        os.startfile(QR_PATH)
-                        add_log("🖼️ 已自动打开二维码图片，请用手机 QQ 扫码")
-                    except Exception:
-                        add_log("⚠️ 无法自动打开二维码，请手动打开 NapCat.Shell\\cache\\qrcode.png")
+                    add_log("📱 二维码已生成，请在窗口中扫码")
                     _update_status()
                 if not _ws_ready:
                     try:
+                        flags = subprocess.CREATE_NO_WINDOW
                         r = subprocess.run(["netstat", "-an"],
-                                           capture_output=True, text=True, timeout=5)
+                                           capture_output=True, text=True, timeout=5,
+                                           creationflags=flags)
                         if ":8080" in r.stdout and "LISTENING" in r.stdout:
                             _ws_ready = True
                             _startup_stage = "websocket"
@@ -170,9 +167,11 @@ def stop_napcat():
     global _napcat_process, _startup_stage, _ws_ready
     try:
         subprocess.run(["taskkill", "/F", "/IM", "NapCatWinBootMain.exe"],
-                       capture_output=True, timeout=5)
+                       capture_output=True, timeout=5,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
         subprocess.run(["taskkill", "/F", "/IM", "QQ.exe"],
-                       capture_output=True, timeout=5)
+                       capture_output=True, timeout=5,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
     except Exception:
         pass
     _napcat_process = None
@@ -223,7 +222,8 @@ def stop_bot():
     if _bot_process and _bot_process.poll() is None:
         try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(_bot_process.pid)],
-                           capture_output=True, timeout=5)
+                           capture_output=True, timeout=5,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
         except Exception:
             pass
         _bot_process = None
@@ -234,24 +234,35 @@ def stop_bot():
 #  一键操作
 # ============================================================
 def start_all():
-    if _bot_process and _bot_process.poll() is None:
-        add_log("🐱 猫娘已经在运行了喵~")
+    if not _starting_lock.acquire(blocking=False):
+        add_log("⏳ 正在启动中，请稍候...")
         return
-    r = start_napcat()
-    add_log(r)
+    try:
+        if _bot_process and _bot_process.poll() is None:
+            add_log("🐱 猫娘已经在运行了喵~")
+            return
+        r = start_napcat()
+        add_log(r)
 
-    def auto_bot():
-        for _ in range(150):
-            time.sleep(1)
-            if _ws_ready:
-                time.sleep(2)
-                r2 = start_bot()
-                add_log(r2)
-                _update_status()
-                _startup_stage = "bot_running"
-                return
-        add_log("⏱ NapCat 启动超时")
-    threading.Thread(target=auto_bot, daemon=True).start()
+        def auto_bot():
+            try:
+                for _ in range(150):
+                    time.sleep(1)
+                    if _ws_ready:
+                        time.sleep(2)
+                        r2 = start_bot()
+                        add_log(r2)
+                        _update_status()
+                        _startup_stage = "bot_running"
+                        return
+                add_log("⏱ NapCat 启动超时")
+            finally:
+                _starting_lock.release()
+
+        threading.Thread(target=auto_bot, daemon=True).start()
+    except Exception:
+        _starting_lock.release()
+        raise
 
 
 def stop_all():
