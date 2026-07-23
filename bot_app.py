@@ -513,9 +513,9 @@ class BotApp:
         tk.Label(config_frame, text="已保存模型：", font=self.FONT_SM,
                  fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
         self.saved_model_var = tk.StringVar(value="")
+        self.saved_model_var.trace_add("write", self._on_select_saved_model)
         self.saved_model_menu = tk.OptionMenu(
             config_frame, self.saved_model_var, "",
-            command=lambda _: self._on_select_saved_model()
         )
         self.saved_model_menu.config(
             bg=self.CARD, fg=self.TEXT, font=self.FONT_SM,
@@ -791,7 +791,7 @@ class BotApp:
         names = list(models.keys())
         menu.add_command(label="（无）", command=lambda: self.saved_model_var.set(""))
         for name in names:
-            menu.add_command(label=name, command=lambda n=name: self._on_select_saved_model(n))
+            menu.add_command(label=name, command=lambda n=name: self.saved_model_var.set(n))
         if self.saved_model_var.get() not in names:
             self.saved_model_var.set("")
 
@@ -813,13 +813,16 @@ class BotApp:
         except Exception:
             pass
 
-    def _on_select_saved_model(self, name=None):
-        if name is None:
-            name = self.saved_model_var.get()
+    def _on_select_saved_model(self, var_name=None, index=None, mode=None):
+        """选中已保存模型时自动填充字段"""
+        name = self.saved_model_var.get()
         if not name:
             return
-        self.saved_model_var.set(name)
         self._fill_from_saved_model(name)
+        # 同时自动保存为选中模型
+        env = load_env()
+        env["SELECTED_MODEL"] = name
+        save_env(env)
 
     def _fill_from_saved_model(self, name: str):
         models = self._load_models_json()
