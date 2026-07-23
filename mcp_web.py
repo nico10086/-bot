@@ -85,8 +85,8 @@ def get_session() -> httpx.Client:
 
 def http_get(
     url: str,
-    timeout: int = 25,
-    retry: int = 2,
+    timeout: int = 15,
+    retry: int = 1,
     referer: str | None = None,
 ) -> httpx.Response:
     """
@@ -276,10 +276,10 @@ def search_web(keyword: str) -> str:
         encoded = urllib.parse.quote(keyword)
         results = []
 
-        # ── 1. Bing 搜索（主引擎，对爬虫友好） ──
+        # ── 1. Bing 搜索（主引擎） ──
         try:
             url = f"https://cn.bing.com/search?q={encoded}&count=5"
-            resp = http_get(url, timeout=15,
+            resp = http_get(url, timeout=10, retry=1,
                             referer="https://cn.bing.com/")
             text = extract_text(resp.text, max_length=4000)
             if text and "captcha" not in resp.text.lower()[:500]:
@@ -287,26 +287,10 @@ def search_web(keyword: str) -> str:
         except Exception:
             pass
 
-        # ── 2. 百度百科（知识查询） ──
-        try:
-            search_url = f"https://baike.baidu.com/search?word={encoded}"
-            resp = http_get(search_url, timeout=15)
-            text = extract_text(resp.text, max_length=2000)
-            if text and not any(kw in resp.text.lower()[:1000]
-                                for kw in ["没有找到", "搜索结果为空", "抱歉"]):
-                item_url = f"https://baike.baidu.com/item/{encoded}"
-                resp2 = http_get(item_url, timeout=15,
-                                 referer="https://baike.baidu.com/")
-                text2 = extract_text(resp2.text, max_length=5000)
-                if text2:
-                    results.append(f"【百度百科】\n{text2}")
-        except Exception:
-            pass
-
-        # ── 3. DuckDuckGo 搜索（备选，纯HTML版，几乎不会被反爬） ──
+        # ── 2. DuckDuckGo 搜索（备选） ──
         try:
             url = f"https://html.duckduckgo.com/html/?q={encoded}"
-            resp = http_get(url, timeout=15,
+            resp = http_get(url, timeout=10, retry=1,
                             referer="https://html.duckduckgo.com/")
             text = extract_text(resp.text, max_length=3000)
             if text and len(text) > 100:
