@@ -133,6 +133,11 @@ def build_system_prompt() -> str:
         "每条消息末尾会附带群成员列表（或成员总数），你可以据此知道群里有哪些人。\n"
         "如果有人问「群里都有谁」之类的，你可以直接看成员列表回答。\n"
         "\n"
+        "【ID 识别】\n"
+        "消息格式中的 (ID:xxxxx) 是群聊的唯一 ID，(QQ:xxxxx) 是用户的 QQ 号。\n"
+        "不同群即使名字相同，ID 也不同，不要混淆。\n"
+        "历史消息中每个用户后面也带有 QQ 号，区分同名用户。"
+        "\n"
         "【历史消息】\n"
         "消息中包含「最近群聊」字段，那是本群最近的聊天记录。\n"
         "阅读这些历史消息可以了解群里之前聊了什么，让回复更有上下文。\n"
@@ -420,20 +425,25 @@ async def handle_msg(ws, data: dict):
         member_summary = format_member_list(members)
 
         # 富文本 + 群成员信息一并发给 AI
-        display_msg = f"[群:{group_name}] {display_name} 说: {rich_text}\n{member_summary}"
+        display_msg = (
+            f"[群:{group_name}](ID:{group_id}) "
+            f"{display_name}(QQ:{user_id}) 说: {rich_text}\n"
+            f"{member_summary}"
+        )
 
         # ── 附加上下文：最近群聊历史 ──
         session_id = f"group_{group_id}"
         hist = group_history.get(session_id, [])[-MAX_HISTORY_PER_GROUP:]
         if hist:
             history_text = "\n".join(
-                f"{m['name']}: {m['text'][:100]}" for m in hist
+                f"{m['name']}(QQ:{m.get('uid','?')}): {m['text'][:100]}" for m in hist
             )
             display_msg += f"\n\n【最近群聊】\n{history_text}"
 
         # ── 保存本消息到历史 ──
         group_history.setdefault(session_id, []).append({
             "name": display_name,
+            "uid": user_id,
             "text": rich_text,
             "time": asyncio.get_event_loop().time(),
         })
@@ -456,7 +466,7 @@ async def handle_msg(ws, data: dict):
         hist = group_history.get(session_id, [])[-MAX_HISTORY_PER_GROUP:]
         if hist:
             history_text = "\n".join(
-                f"{m['name']}: {m['text'][:100]}" for m in hist
+                f"{m['name']}(QQ:{m.get('uid','?')}): {m['text'][:100]}" for m in hist
             )
             display_msg = f"{raw_msg}\n\n【最近私聊】\n{history_text}"
         else:
@@ -467,6 +477,7 @@ async def handle_msg(ws, data: dict):
         display_name = sender.get("nickname") or f"QQ{user_id}"
         group_history.setdefault(session_id, []).append({
             "name": display_name,
+            "uid": user_id,
             "text": raw_msg,
             "time": asyncio.get_event_loop().time(),
         })
