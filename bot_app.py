@@ -40,6 +40,7 @@ _log_lines: list[str] = []
 _log_lock = threading.Lock()
 _tray_icon: pystray.Icon | None = None
 _main_window: tk.Tk | None = None
+_minimize_choice: str | None = None  # "tray"=最小化到托盘, "quit"=退出, None=未选择
 
 
 # ============================================================
@@ -594,10 +595,35 @@ class BotApp:
 
     # ── 托盘 ──
     def _minimize_to_tray(self):
-        self.root.withdraw()
-        add_log("🐱 猫娘 Bot 已最小化到系统托盘")
-        # 启动托盘（在单独线程）
-        threading.Thread(target=setup_tray, daemon=True).start()
+        global _minimize_choice
+        # 第一次点击叉：询问用户
+        if _minimize_choice is None:
+            choice = tk.messagebox.askyesnocancel(
+                title="🐱 猫娘 Bot",
+                message=(
+                    "点击「是」→ 最小化到系统托盘（后台继续运行）\n"
+                    "点击「否」→ 完全关闭程序\n"
+                    "点击「取消」→ 不操作\n\n"
+                    "提示：选择最小化后，本次运行中再点叉会直接最小化。"
+                ),
+                icon="question",
+            )
+            if choice is None:  # 取消
+                return
+            elif choice:  # 是 → 最小化到托盘
+                _minimize_choice = "tray"
+            else:  # 否 → 完全退出
+                _minimize_choice = "quit"
+                _quit_app()
+                return
+
+        # 已经选择过：直接执行
+        if _minimize_choice == "tray":
+            self.root.withdraw()
+            add_log("🐱 猫娘 Bot 已最小化到系统托盘")
+            threading.Thread(target=setup_tray, daemon=True).start()
+        else:  # quit
+            _quit_app()
 
     def run(self):
         self.root.mainloop()
