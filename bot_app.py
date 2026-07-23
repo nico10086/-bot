@@ -70,6 +70,30 @@ def load_env() -> dict[str, str]:
     return cfg
 
 
+def save_env(config: dict[str, str]) -> None:
+    """保存配置到 .env"""
+    lines = []
+    if os.path.exists(ENV_PATH):
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    written_keys = set()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in config:
+                new_lines.append(f"{key}={config[key]}\n")
+                written_keys.add(key)
+                continue
+        new_lines.append(line)
+    for key, val in config.items():
+        if key not in written_keys:
+            new_lines.append(f"{key}={val}\n")
+    with open(ENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+
 def find_qq_path() -> str | None:
     for subkey in (
         r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\QQ",
@@ -401,6 +425,7 @@ class BotApp:
         self.FONT_MONO = ("Cascadia Code", 10)
 
         self._build_ui()
+        self._load_config_to_ui()
         self._refresh_timer()
 
     def _icon_data(self):
@@ -481,16 +506,68 @@ class BotApp:
                                      **btn_style)
         self.btn_restart.pack(side="left", padx=(0, 8))
 
-        # 单独启动按钮
-        self.btn_napcat = tk.Button(frame, text="启动 NapCat", bg=self.BORDER, fg=self.TEXT,
+        # ── 配置行 ──
+        config_frame = tk.Frame(parent, bg=self.BG)
+        config_frame.pack(fill="x", padx=20, pady=(4, 8))
+
+        tk.Label(config_frame, text="性格：", font=self.FONT_SM,
+                 fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
+
+        self.personality_var = tk.StringVar(value="catgirl")
+        self.personality_menu = tk.OptionMenu(
+            config_frame, self.personality_var,
+            "catgirl", "tsundere",
+            command=lambda _: self._save_personality()
+        )
+        self.personality_menu.config(
+            bg=self.CARD, fg=self.TEXT, font=self.FONT_SM,
+            activebackground=self.CARD_HOVER if hasattr(self, 'CARD_HOVER') else self.CARD,
+            highlightthickness=0, border=0,
+        )
+        self.personality_menu.pack(side="left", padx=(0, 12))
+
+        tk.Label(config_frame, text="模型：", font=self.FONT_SM,
+                 fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
+        self.cfg_model = tk.Entry(config_frame, font=self.FONT_SM,
+                                  bg=self.CARD, fg=self.TEXT,
+                                  border=0, width=16, insertbackground=self.TEXT)
+        self.cfg_model.pack(side="left", padx=(0, 12))
+        self.cfg_model.insert(0, "deepseek-chat")
+
+        tk.Label(config_frame, text="Temp：", font=self.FONT_SM,
+                 fg=self.TEXT_DIM, bg=self.BG).pack(side="left")
+        self.cfg_temp = tk.Entry(config_frame, font=self.FONT_SM,
+                                 bg=self.CARD, fg=self.TEXT,
+                                 border=0, width=6, insertbackground=self.TEXT)
+        self.cfg_temp.pack(side="left", padx=(0, 12))
+        self.cfg_temp.insert(0, "0.7")
+
+        # 单独启动按钮（右上）
+        btn_top = tk.Frame(parent, bg=self.BG)
+        btn_top.pack(fill="x", padx=20)
+        self.btn_napcat = tk.Button(btn_top, text="启动 NapCat", bg=self.BORDER, fg=self.TEXT,
                                     font=self.FONT_SM,
                                     command=lambda: threading.Thread(target=lambda: add_log(start_napcat()), daemon=True).start())
         self.btn_napcat.pack(side="right", padx=(4, 0))
 
-        self.btn_bot_only = tk.Button(frame, text="启动 Bot", bg=self.BORDER, fg=self.TEXT,
+        self.btn_bot_only = tk.Button(btn_top, text="启动 Bot", bg=self.BORDER, fg=self.TEXT,
                                       font=self.FONT_SM,
                                       command=lambda: threading.Thread(target=lambda: add_log(start_bot()), daemon=True).start())
         self.btn_bot_only.pack(side="right", padx=(4, 0))
+
+    def _save_personality(self):
+        """保存性格设置到 .env"""
+        val = self.personality_var.get()
+        personality_map = {"catgirl": "catgirl", "tsundere": "tsundere"}
+        mapped = personality_map.get(val, "catgirl")
+        env = load_env()
+        env["BOT_PERSONALITY"] = mapped
+        save_env(env)
+        add_log(f"🎭 性格已切换为: {mapped}")
+        # 如果 Bot 正在运行，提醒重启生效
+        s = get_status()
+        if s["bot"]:
+            add_log("💡 性格已保存，重启 Bot 后生效")
 
     def _build_qrcode(self, parent):
         """二维码显示区域（左侧）"""
@@ -603,6 +680,21 @@ class BotApp:
         """定时刷新"""
         self._refresh_ui()
         self.root.after(2000, self._refresh_timer)
+
+    def _load_config_to_ui(self):
+        """加载 .env 配置到 UI 控件"""
+        env = load_env()
+        personality = env.get("BOT_PERSONALITY", "catgirl")
+        if personality in ("catgirl", "tsundere"):
+            self.personality_var.set(personality)
+        model = env.get("model", "")
+        if model:
+            self.cfg_model.delete(0, "end")
+            self.cfg_model.insert(0, model)
+        temp = env.get("temperature", "")
+        if temp:
+            self.cfg_temp.delete(0, "end")
+            self.cfg_temp.insert(0, temp)
 
     # ── 托盘 ──
     def _minimize_to_tray(self):
